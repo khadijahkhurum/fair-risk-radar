@@ -1,0 +1,86 @@
+// Prisma schema for FAIR Risk Radar.
+//
+// Design notes:
+// - `Control` is the compliance-as-code catalog: one row per control, cross-mapped
+//   to every framework it satisfies. Seeded from controls/catalog.yaml — the YAML
+//   file is the source of truth; this table is a queryable mirror of it.
+// - `Scenario` holds the FAIR distribution parameters for one threat scenario
+//   against one industry loss profile (min/mode/max triples, stored as JSON).
+// - `ControlCoverage` is the current coverage % per control per scenario, plus
+//   where that number came from ("manual" or "aws-config") — this is what makes
+//   coverage state persist across sessions instead of resetting on page load.
+// - `RiskAssessment` is an immutable row written every time the FAIR engine runs.
+//   That history is the audit trail: "what did we believe our exposure was, and
+//   under what control posture, as of when" — the thing a static slider demo
+//   can never show.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Control {
+  id                String   @id @default(cuid())
+  key               String   @unique // "mfa" | "patch" | "kms"
+  name              String
+  description       String
+  weight            Float    // influence on Vulnerability, 0..1, weights across controls sum to 1
+  frameworkMappings Json     // { "NIST CSF 2.0": "PR.AA-03, PR.AA-05", "ISO 27001:2022": "...", ... }
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  coverage ControlCoverage[]
+}
+
+model Scenario {
+  id             String   @id @default(cuid())
+  key            String   @unique // "healthcare" | "financial" | "technology" | "retail" | "public"
+  label          String
+  threat         String
+  sourceCitation String
+
+  // FAIR distribution parameters, each a {min, mode, max} triple.
+  tef           Json // Threat Event Frequency (events/year) — modeled
+  vulnBaseline  Json // Vulnerability before controls (0..1)        — modeled
+  secProb       Json // Secondary Loss Probability (0..1)           — modeled
+  lossPrimary   Json // Primary Loss Magnitude (USD)                — sourced (IBM 2025)
+  lossSecondary Json // Secondary Loss Magnitude (USD)               — sourced (IBM 2025)
+
+  toleranceUsd Float // board-approved annual loss tolerance
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  coverage    ControlCoverage[]
+  assessments RiskAssessment[]
+}
+
+model ControlCoverage {
+  id          String   @id @default(cuid())
+  scenarioId  String
+  scenario    Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  controlId   String
+  control     Control  @relation(fields: [controlId], references: [id], onDelete: Cascade)
+  coveragePct Float // 0..100
+  source      String // "manual" | "aws-config" | "demo"
+  updatedAt   DateTime @updatedAt
+
+  @@unique([scenarioId, controlId])
+}
+
+model RiskAssessment {
+  id                 String   @id @default(cuid())
+  scenarioId         String
+  scenario           Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  trials             Int
+  expectedAnnualLoss Float
+  p50                Float
+  p95                Float
+  p99                Float
+  lossEventFrequency Float
+  controlSnapshot    Json // { mfa: 62, patch: 55, kms: 70 } — coverage at the moment this ran
+  createdAt          DateTime @default(now())
+}
