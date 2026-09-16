@@ -11,6 +11,16 @@ import type { FairProfile, Triangular } from "./fair";
  * anywhere, so they're explicit assumptions meant to be recalibrated against
  * your own telemetry (see README § Methodology). The min/max spread around
  * each sourced loss figure is also modeled, since IBM publishes the mean only.
+ *
+ * Calibration note on vulnBaseline — the probability that a significant threat
+ * event becomes a material loss event, before controls. An earlier draft used
+ * ~27%, which at 14 threat events/year implies roughly four material breaches
+ * annually for a mid-size bank: not survivable, and not what the incident
+ * record shows. These values sit at 4.6–6.8%, which puts untreated expected
+ * annual loss a little above one industry-average breach per year and leaves
+ * the board tolerance reachable at 60–75% weighted control coverage. Regulated
+ * sectors carry the lower baselines (more mature controls, more attacker
+ * effort per success); retail and public sector carry the higher ones.
  */
 
 const GLOBAL_TOTAL = 4_440_000;
@@ -47,7 +57,7 @@ export const SCENARIO_DEFINITIONS: ScenarioDefinition[] = [
     toleranceUsd: 3_500_000,
     profile: {
       tef: { min: 6, mode: 15, max: 32 },
-      vulnBaseline: { min: 0.1, mode: 0.32, max: 0.6 },
+      vulnBaseline: { min: 0.013, mode: 0.046, max: 0.12 },
       secProb: { min: 0.55, mode: 0.8, max: 0.95 },
       ...splitLoss(7_420_000),
     },
@@ -60,7 +70,7 @@ export const SCENARIO_DEFINITIONS: ScenarioDefinition[] = [
     toleranceUsd: 2_800_000,
     profile: {
       tef: { min: 6, mode: 14, max: 30 },
-      vulnBaseline: { min: 0.08, mode: 0.27, max: 0.55 },
+      vulnBaseline: { min: 0.015, mode: 0.052, max: 0.13 },
       secProb: { min: 0.55, mode: 0.78, max: 0.95 },
       ...splitLoss(5_560_000),
     },
@@ -73,7 +83,7 @@ export const SCENARIO_DEFINITIONS: ScenarioDefinition[] = [
     toleranceUsd: 2_400_000,
     profile: {
       tef: { min: 5, mode: 12, max: 26 },
-      vulnBaseline: { min: 0.09, mode: 0.28, max: 0.55 },
+      vulnBaseline: { min: 0.016, mode: 0.054, max: 0.14 },
       secProb: { min: 0.5, mode: 0.75, max: 0.93 },
       ...splitLoss(4_790_000),
     },
@@ -86,7 +96,7 @@ export const SCENARIO_DEFINITIONS: ScenarioDefinition[] = [
     toleranceUsd: 1_800_000,
     profile: {
       tef: { min: 4, mode: 10, max: 22 },
-      vulnBaseline: { min: 0.08, mode: 0.26, max: 0.52 },
+      vulnBaseline: { min: 0.018, mode: 0.064, max: 0.16 },
       secProb: { min: 0.5, mode: 0.73, max: 0.92 },
       ...splitLoss(3_540_000),
     },
@@ -99,7 +109,7 @@ export const SCENARIO_DEFINITIONS: ScenarioDefinition[] = [
     toleranceUsd: 1_400_000,
     profile: {
       tef: { min: 4, mode: 9, max: 20 },
-      vulnBaseline: { min: 0.08, mode: 0.25, max: 0.5 },
+      vulnBaseline: { min: 0.019, mode: 0.068, max: 0.17 },
       secProb: { min: 0.45, mode: 0.7, max: 0.9 },
       ...splitLoss(2_860_000),
     },

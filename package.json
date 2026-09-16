@@ -10,7 +10,8 @@
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:reset-coverage": "tsx prisma/reset-coverage.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

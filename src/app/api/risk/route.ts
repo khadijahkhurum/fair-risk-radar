@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { simulate, sensitivity, type FairProfile } from "@/lib/fair";
+import { simulate, sensitivity, exceedanceCurve, histogram, type FairProfile } from "@/lib/fair";
 
 const TRIALS = 8000;
 const SENSITIVITY_TRIALS = 2000;
@@ -86,9 +86,12 @@ export async function POST(req: NextRequest) {
     sensitivityRows = sensitivity(profile, coverage, SENSITIVITY_TRIALS);
   }
 
+  // Send chart-ready summaries rather than all 8,000 raw losses: same picture,
+  // ~70 points instead of a six-figure-byte payload on every slider move.
   return NextResponse.json({
     assessment: saved,
-    losses: result.losses, // sorted, for the client to build the exceedance curve / histogram
+    curve: exceedanceCurve(result.losses),
+    histogram: histogram(result.losses),
     coverage,
     sensitivity: sensitivityRows,
   });

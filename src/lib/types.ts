@@ -44,9 +44,20 @@ export interface SensitivityRow {
   range: number;
 }
 
+export interface CurvePoint {
+  x: number;
+  y: number;
+}
+
+export interface HistogramBin {
+  start: number;
+  count: number;
+}
+
 export interface RunResult {
   assessment: AssessmentPayload;
-  losses: number[];
+  curve: CurvePoint[];
+  histogram: HistogramBin[];
   coverage: number;
   sensitivity: SensitivityRow[] | null;
 }

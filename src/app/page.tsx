@@ -1,47 +1,163 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+  useDeferredValue,
+} from "react";
 import Chart from "chart.js/auto";
-import { fmtUsd, fmtUsdShort, quantile } from "@/lib/format";
-import type { ScenarioPayload, RunResult, SensitivityRow } from "@/lib/types";
-
-const N_MAIN = 8000;
+import { fmtUsd, fmtUsdShort } from "@/lib/format";
+import {
+  simulate,
+  sensitivity as computeSensitivity,
+  exceedanceCurve,
+  histogram,
+  type FairProfile,
+} from "@/lib/fair";
+import type { ScenarioPayload, AssessmentPayload, ControlPayload } from "@/lib/types";
 
 type TabKey = "lec" | "hist" | "tornado";
+type Theme = "light" | "dark";
+
+/**
+ * Dragging a slider runs the model locally so the charts track the input with
+ * no network in the loop. The server run (8,000 trials) is reserved for
+ * "Run simulation", which is also what writes an immutable assessment row —
+ * so the audit trail records deliberate assessments, not every slider twitch.
+ */
+const PREVIEW_TRIALS = 4000;
+const SENSITIVITY_TRIALS = 1200;
+
+const TABS: { key: TabKey; label: string }[] = [
+  { key: "lec", label: "Exceedance" },
+  { key: "hist", label: "Distribution" },
+  { key: "tornado", label: "Sensitivity" },
+];
+
+/* ------------------------------ icons ------------------------------ */
+
+function Icon({ path, size = 14 }: { path: string; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ flexShrink: 0 }}
+    >
+      <path d={path} />
+    </svg>
+  );
+}
+
+const ICONS = {
+  sun: "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4",
+  moon: "M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z",
+  download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
+  refresh: "M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15",
+  cloud: "M18 10h-1.3A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z",
+  book: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15z",
+  play: "M5 3l14 9-14 9V3z",
+  check: "M20 6L9 17l-5-5",
+};
+
+/* ------------------------------ helpers ------------------------------ */
+
+function profileOf(s: ScenarioPayload): FairProfile {
+  return {
+    tef: s.tef,
+    vulnBaseline: s.vulnBaseline,
+    secProb: s.secProb,
+    lossPrimary: s.lossPrimary,
+    lossSecondary: s.lossSecondary,
+  };
+}
+
+function coverageOf(controls: ControlPayload[]): number {
+  return controls.reduce((sum, c) => sum + (c.coveragePct / 100) * c.weight, 0);
+}
+
+/* ------------------------------ page ------------------------------ */
 
 export default function Page() {
   const [scenarios, setScenarios] = useState<ScenarioPayload[] | null>(null);
   const [selectedKey, setSelectedKey] = useState<string>("");
-  const [result, setResult] = useState<RunResult | null>(null);
-  const [sensitivity, setSensitivity] = useState<SensitivityRow[] | null>(null);
+  const [recorded, setRecorded] = useState<AssessmentPayload | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("lec");
   const [running, setRunning] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [syncNote, setSyncNote] = useState<string | null>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [theme, setTheme] = useState<Theme>("light");
+  const patchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scenario = useMemo(
     () => scenarios?.find((s) => s.key === selectedKey) ?? null,
     [scenarios, selectedKey]
   );
 
-  const runSimulation = useCallback(async (key: string, includeSensitivity = false) => {
-    setRunning(true);
-    try {
-      const res = await fetch("/api/risk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scenario: key, includeSensitivity }),
-      });
-      const data: RunResult = await res.json();
-      setResult(data);
-      if (data.sensitivity) setSensitivity(data.sensitivity);
-    } finally {
-      setRunning(false);
-    }
+  /* ---- live local model ------------------------------------------------ */
+  // Deferring the controls lets the slider thumb stay on the fast path while
+  // the simulation runs against the slightly-behind value.
+  const deferredScenario = useDeferredValue(scenario);
+  const isStale = deferredScenario !== scenario;
+
+  const preview = useMemo(() => {
+    if (!deferredScenario) return null;
+    const result = simulate(
+      profileOf(deferredScenario),
+      coverageOf(deferredScenario.controls),
+      PREVIEW_TRIALS
+    );
+    // Share of simulated years that blow through the board-approved ceiling.
+    // This is the number the tolerance line on the chart is showing.
+    const tolerance = deferredScenario.toleranceUsd;
+    const breaches = result.losses.filter((v) => v >= tolerance).length;
+    return {
+      mean: result.mean,
+      p95: result.p95,
+      p99: result.p99,
+      lef: result.lossEventFrequency,
+      curve: exceedanceCurve(result.losses),
+      bins: histogram(result.losses),
+      pOverTolerance: (breaches / result.losses.length) * 100,
+      tolerance,
+    };
+  }, [deferredScenario]);
+
+  const sensitivityRows = useMemo(() => {
+    if (activeTab !== "tornado" || !deferredScenario) return null;
+    return computeSensitivity(
+      profileOf(deferredScenario),
+      coverageOf(deferredScenario.controls),
+      SENSITIVITY_TRIALS
+    );
+  }, [activeTab, deferredScenario]);
+
+  /* ---- theme ----------------------------------------------------------- */
+  useEffect(() => {
+    setTheme((document.documentElement.getAttribute("data-theme") as Theme) || "light");
   }, []);
 
-  // Initial load.
+  function toggleTheme() {
+    const next: Theme = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.setAttribute("data-theme", next);
+    try {
+      localStorage.setItem("frr-theme", next);
+    } catch {
+      /* storage blocked — still applies for this session */
+    }
+  }
+
+  /* ---- data load ------------------------------------------------------- */
   useEffect(() => {
     fetch("/api/scenarios")
       .then((r) => r.json())
@@ -49,56 +165,86 @@ export default function Page() {
         setScenarios(data);
         if (data.length > 0) {
           setSelectedKey(data[0].key);
-          runSimulation(data[0].key);
+          setRecorded(data[0].latestAssessment);
         }
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function onScenarioChange(key: string) {
+  function selectScenario(key: string) {
+    if (key === selectedKey) return;
     setSelectedKey(key);
-    setSensitivity(null);
+    setRecorded(scenarios?.find((s) => s.key === key)?.latestAssessment ?? null);
     setActiveTab("lec");
-    runSimulation(key);
+    setNotice(null);
   }
 
-  function scheduleRecompute(key: string) {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      setSensitivity(null);
-      runSimulation(key);
-    }, 250);
-  }
+  /* ---- interactions ---------------------------------------------------- */
+  const onSliderChange = useCallback(
+    (controlKey: string, value: number) => {
+      if (!scenario) return;
+      const scenarioKey = scenario.key;
 
-  async function onSliderChange(controlKey: string, value: number) {
+      setScenarios(
+        (prev) =>
+          prev?.map((s) =>
+            s.key !== scenarioKey
+              ? s
+              : {
+                  ...s,
+                  controls: s.controls.map((c) =>
+                    c.key === controlKey ? { ...c, coveragePct: value, source: "manual" } : c
+                  ),
+                }
+          ) ?? null
+      );
+
+      // Persist coverage in the background — the UI never waits on it.
+      if (patchTimer.current) clearTimeout(patchTimer.current);
+      patchTimer.current = setTimeout(() => {
+        fetch("/api/controls", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scenario: scenarioKey, control: controlKey, coveragePct: value }),
+        }).catch(() => {
+          setNotice("Couldn't save control coverage — check your connection.");
+        });
+      }, 500);
+    },
+    [scenario]
+  );
+
+  async function recordAssessment() {
     if (!scenario) return;
-    // Optimistic local update so the slider feels immediate.
-    setScenarios(
-      (prev) =>
-        prev?.map((s) =>
-          s.key !== scenario.key
-            ? s
-            : {
-                ...s,
-                controls: s.controls.map((c) =>
-                  c.key === controlKey ? { ...c, coveragePct: value, source: "manual" } : c
-                ),
-              }
-        ) ?? null
-    );
-    scheduleRecompute(scenario.key);
-
-    await fetch("/api/controls", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scenario: scenario.key, control: controlKey, coveragePct: value }),
-    });
+    setRunning(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/risk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scenario: scenario.key }),
+      });
+      const data = await res.json();
+      setRecorded(data.assessment);
+      setScenarios(
+        (prev) =>
+          prev?.map((s) =>
+            s.key === scenario.key ? { ...s, latestAssessment: data.assessment } : s
+          ) ?? null
+      );
+      setNotice(
+        `Assessment recorded — ${data.assessment.trials.toLocaleString()} trials written to the register.`
+      );
+    } catch {
+      setNotice("Couldn't record the assessment — check your connection.");
+    } finally {
+      setRunning(false);
+    }
   }
 
   async function onSyncAws() {
     if (!scenario) return;
     setSyncing(true);
-    setSyncNote(null);
+    setNotice(null);
     try {
       const res = await fetch("/api/integrations/aws-config", {
         method: "POST",
@@ -106,503 +252,784 @@ export default function Page() {
         body: JSON.stringify({ scenario: scenario.key }),
       });
       const data = await res.json();
-      setSyncNote(data.note ?? null);
-      // Refresh scenario list to pick up new coverage + source labels.
+      setNotice(data.note ?? null);
       const refreshed: ScenarioPayload[] = await fetch("/api/scenarios").then((r) => r.json());
       setScenarios(refreshed);
-      setSensitivity(null);
-      runSimulation(scenario.key);
     } finally {
       setSyncing(false);
     }
   }
 
-  function onTabClick(tab: TabKey) {
-    setActiveTab(tab);
-    if (tab === "tornado" && !sensitivity && scenario) {
-      runSimulation(scenario.key, true);
-    }
-  }
-
-  const coveragePct = scenario
-    ? Math.round(
-        (scenario.controls.reduce((sum, c) => sum + (c.coveragePct / 100) * c.weight, 0)) * 100
-      )
-    : 0;
+  const weightedCoverage = scenario ? Math.round(coverageOf(scenario.controls) * 100) : 0;
+  const overTolerance = scenario && preview ? preview.mean > scenario.toleranceUsd : false;
 
   return (
-    <div className="wrap">
-      <header className="top">
-        <div className="top-row">
-          <div className="brand">
-            <h1>FAIR Risk Radar</h1>
-            <p>
-              An annual-loss model for a cyber breach scenario, quantified with the Open Group&apos;s
-              FAIR ontology, run as a server-side Monte Carlo simulation backed by Postgres — every run
-              is persisted as an audit trail, and control coverage can sync live from AWS Config.
-            </p>
-            <span className="method-tag">
-              Engine: <b>Monte Carlo</b> · {N_MAIN.toLocaleString()} trials · Postgres-backed
-            </span>
-          </div>
-          <div className="header-actions">
-            <div>
-              <label className="select-label" htmlFor="industry">
-                Industry loss profile
-              </label>
-              <select
-                id="industry"
-                className="ind-select"
-                value={selectedKey}
-                onChange={(e) => onScenarioChange(e.target.value)}
-              >
-                {scenarios?.map((s) => (
-                  <option key={s.key} value={s.key}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {scenario && (
-              <div className="btn-row">
-                <button className="btn" onClick={onSyncAws} disabled={syncing}>
-                  {syncing ? "Syncing…" : "Sync from AWS Config"}
+    <div className="app">
+      {/* ---------------- sidebar ---------------- */}
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <span className="brand-mark">FR</span>
+          <span className="brand-name">Risk Radar</span>
+        </div>
+
+        <nav className="nav">
+          <div className="nav-group">
+            <p className="nav-label">Risk register</p>
+            {scenarios?.map((s) => {
+              const active = s.key === selectedKey;
+              return (
+                <button
+                  key={s.key}
+                  className="nav-item"
+                  aria-current={active}
+                  onClick={() => selectScenario(s.key)}
+                >
+                  <span className="nav-item-label">
+                    <span
+                      className="nav-dot"
+                      style={{ background: active ? "var(--accent)" : "var(--border-strong)" }}
+                    />
+                    {s.label.split(" — ")[0]}
+                  </span>
                 </button>
-                <a className="btn" href={`/api/reports/export?scenario=${scenario.key}&format=csv`}>
-                  Export CSV
+              );
+            }) ?? <p className="nav-label">Loading…</p>}
+          </div>
+
+          <div className="nav-group">
+            <p className="nav-label">Reference</p>
+            <a className="nav-item" href="#methodology" style={{ textDecoration: "none" }}>
+              <span className="nav-item-label">
+                <Icon path={ICONS.book} size={13} />
+                Methodology
+              </span>
+            </a>
+          </div>
+        </nav>
+
+        <div className="sidebar-foot">
+          Loss data calibrated to IBM&apos;s 2025 Cost of a Data Breach Report. Frequency and
+          vulnerability are modeled assumptions.
+        </div>
+      </aside>
+
+      {/* ---------------- main ---------------- */}
+      <div className="main">
+        <header className="topbar">
+          <div className="crumb">
+            <span className="crumb-hide">Risk register</span>
+            <span className="crumb-sep crumb-hide">/</span>
+            <strong>{scenario ? scenario.label.split(" — ")[0] : "Loading…"}</strong>
+          </div>
+
+          <div className="topbar-actions">
+            <button
+              className="btn btn-icon"
+              onClick={toggleTheme}
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            >
+              <Icon path={theme === "dark" ? ICONS.sun : ICONS.moon} />
+            </button>
+            {scenario && (
+              <>
+                <button className="btn" onClick={onSyncAws} disabled={syncing}>
+                  <Icon path={ICONS.cloud} />
+                  {syncing ? "Syncing…" : "Sync AWS"}
+                </button>
+                <a
+                  className="btn"
+                  href={`/api/reports/export?scenario=${scenario.key}&format=csv`}
+                  aria-disabled={!recorded}
+                  onClick={(e) => {
+                    if (!recorded) {
+                      e.preventDefault();
+                      setNotice("Record an assessment first — exports read from the register.");
+                    }
+                  }}
+                >
+                  <Icon path={ICONS.download} />
+                  CSV
                 </a>
-                <a className="btn primary" href={`/api/reports/export?scenario=${scenario.key}&format=pdf`}>
-                  Export PDF
+                <a
+                  className="btn"
+                  href={`/api/reports/export?scenario=${scenario.key}&format=pdf`}
+                  aria-disabled={!recorded}
+                  onClick={(e) => {
+                    if (!recorded) {
+                      e.preventDefault();
+                      setNotice("Record an assessment first — exports read from the register.");
+                    }
+                  }}
+                >
+                  <Icon path={ICONS.download} />
+                  PDF
                 </a>
-              </div>
+                <button className="btn btn-primary" onClick={recordAssessment} disabled={running}>
+                  <Icon path={running ? ICONS.refresh : ICONS.play} />
+                  {running ? "Recording…" : "Record assessment"}
+                </button>
+              </>
             )}
           </div>
-        </div>
-        {syncNote && <p className="loading-note" style={{ marginTop: 10 }}>{syncNote}</p>}
-      </header>
+        </header>
 
-      {!scenario || !result ? (
-        <p className="loading-note" style={{ marginTop: 20 }}>
-          Loading scenarios…
-        </p>
-      ) : (
-        <>
-          <section className="kpis">
-            <div className="kpi">
-              <p className="lbl">Expected annual loss</p>
-              <p className="val">{fmtUsd(result.assessment.expectedAnnualLoss)}</p>
-              <p className="sub">mean of {result.assessment.trials.toLocaleString()} simulated years</p>
+        <div className="content">
+          {!scenario || !preview ? (
+            <div className="panel">
+              <p className="empty-state">Loading risk register…</p>
             </div>
-            <div className="kpi">
-              <p className="lbl">Value at risk — P95</p>
-              <p className="val">{fmtUsd(result.assessment.p95)}</p>
-              <p className="sub">1-in-20-year annual loss</p>
-            </div>
-            <div className="kpi">
-              <p className="lbl">Value at risk — P99</p>
-              <p className="val">{fmtUsd(result.assessment.p99)}</p>
-              <p className="sub">1-in-100-year annual loss</p>
-            </div>
-            <div className="kpi">
-              <p className="lbl">Loss event frequency</p>
-              <p className="val">{result.assessment.lossEventFrequency.toFixed(2)}</p>
-              <p className="sub">expected loss events / year</p>
-            </div>
-          </section>
-
-          <div className="grid">
-            <div className="card">
-              <div className="card-hd">
-                <h2>Risk factors</h2>
+          ) : (
+            <>
+              <div className="page-head">
+                <h1>{scenario.label.split(" — ")[0]}</h1>
+                <p>{scenario.threat}</p>
               </div>
-              <div className="card-bd">
-                <div className="tree">
-                  <b>Loss Event Frequency</b> = Threat Event Frequency <span className="op">×</span>{" "}
-                  Vulnerability
-                  <br />
-                  <b>Loss Magnitude</b> = Primary Loss <span className="op">+</span> (Secondary Loss
-                  Probability <span className="op">×</span> Secondary Loss Magnitude)
+
+              {notice && (
+                <div className="toast">
+                  <Icon path={ICONS.check} />
+                  {notice}
                 </div>
+              )}
 
-                <FactorRow label="Threat event frequency" badge="modeled" tri={scenario.tef} fmt={(x) => x.toFixed(0) + "/yr"} />
-                <FactorRow label="Vulnerability (baseline)" badge="modeled" tri={scenario.vulnBaseline} fmt={(x) => (x * 100).toFixed(0) + "%"} />
-                <FactorRow label="Primary loss magnitude" badge="sourced" tri={scenario.lossPrimary} fmt={fmtUsdShort} />
-                <FactorRow label="Secondary loss magnitude" badge="sourced" tri={scenario.lossSecondary} fmt={fmtUsdShort} />
-                <FactorRow label="Secondary loss probability" badge="modeled" tri={scenario.secProb} fmt={(x) => (x * 100).toFixed(0) + "%"} />
+              <div className="kpi-row">
+                <div className="kpi">
+                  <p className="kpi-label">Expected annual loss</p>
+                  <p className="kpi-value">{fmtUsd(preview.mean)}</p>
+                  <div className="kpi-foot">
+                    <span className={`chip ${overTolerance ? "chip-danger" : "chip-success"}`}>
+                      {overTolerance ? "Over tolerance" : "Within tolerance"}
+                    </span>
+                    <span style={{ marginLeft: 8 }}>
+                      {preview.pOverTolerance.toFixed(1)}% of years exceed{" "}
+                      {fmtUsdShort(preview.tolerance)}
+                    </span>
+                  </div>
+                </div>
+                <div className="kpi">
+                  <p className="kpi-label">Value at risk — P95</p>
+                  <p className="kpi-value">{fmtUsd(preview.p95)}</p>
+                  <p className="kpi-foot">1-in-20-year annual loss</p>
+                </div>
+                <div className="kpi">
+                  <p className="kpi-label">Value at risk — P99</p>
+                  <p className="kpi-value">{fmtUsd(preview.p99)}</p>
+                  <p className="kpi-foot">1-in-100-year annual loss</p>
+                </div>
+                <div className="kpi">
+                  <p className="kpi-label">Loss event frequency</p>
+                  <p className="kpi-value">{preview.lef.toFixed(2)}</p>
+                  <p className="kpi-foot">expected loss events per year</p>
+                </div>
+              </div>
 
-                <h3 style={{ fontSize: 12.5, margin: "20px 0 2px", fontWeight: 600 }}>Control coverage</h3>
-                <p className="slider-hint" style={{ marginTop: 2 }}>
-                  Controls act on <b>Vulnerability</b>. Drag manually, or sync from AWS Config above.
-                </p>
-                <div className="sliders">
-                  {scenario.controls.map((c) => (
-                    <div className="slider-row" key={c.key}>
-                      <div className="slider-top">
-                        <span>{c.name}</span>
-                        <span className="v">{Math.round(c.coveragePct)}%</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={100}
-                        step={1}
-                        value={c.coveragePct}
-                        onChange={(e) => onSliderChange(c.key, Number(e.target.value))}
-                        aria-label={`${c.name} coverage`}
-                      />
-                      <p className="slider-hint">
-                        {c.description}{" "}
-                        <span className={`badge ${c.source === "aws-config" ? "live" : c.source === "demo" ? "demo" : "modeled"}`}>
-                          {c.source}
-                        </span>
-                      </p>
+              <div className="split">
+                <section className="panel">
+                  <div className="panel-head">
+                    <h2>Simulated outcomes</h2>
+                    <div className="segmented" role="tablist" aria-label="Chart view">
+                      {TABS.map((t) => (
+                        <button
+                          key={t.key}
+                          role="tab"
+                          aria-selected={activeTab === t.key}
+                          onClick={() => setActiveTab(t.key)}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                  <ChartPanel
+                    tab={activeTab}
+                    curve={preview.curve}
+                    bins={preview.bins}
+                    sensitivity={sensitivityRows}
+                    p95={preview.p95}
+                    p99={preview.p99}
+                    mean={preview.mean}
+                    tolerance={preview.tolerance}
+                    pOverTolerance={preview.pOverTolerance}
+                    withinTolerance={!overTolerance}
+                    trials={PREVIEW_TRIALS}
+                    stale={isStale}
+                    theme={theme}
+                  />
+                </section>
 
-                <div className="vuln-readout">
-                  <span>Weighted control coverage</span>
-                  <span className="v">{coveragePct}%</span>
-                </div>
+                <section className="panel">
+                  <div className="panel-head">
+                    <h2>Control coverage</h2>
+                    <span className="chip chip-neutral tnum">{weightedCoverage}% weighted</span>
+                  </div>
+                  <div className="panel-body">
+                    {scenario.controls.map((c) => (
+                      <ControlSlider key={c.key} control={c} onChange={onSliderChange} />
+                    ))}
+                  </div>
+                  <div className="summary-bar">
+                    <span style={{ color: "var(--text-muted)" }}>Applied to vulnerability</span>
+                    <span className="val">−{Math.round(weightedCoverage * 0.8)}%</span>
+                  </div>
+                </section>
               </div>
-            </div>
 
-            <div className="card">
-              <div className="card-hd">
-                <h2>Simulated outcomes</h2>
-                <div className="tabs" role="tablist" aria-label="Chart view">
-                  {(["lec", "hist", "tornado"] as TabKey[]).map((tab) => (
-                    <button
-                      key={tab}
-                      className="tab-btn"
-                      role="tab"
-                      aria-selected={activeTab === tab}
-                      onClick={() => onTabClick(tab)}
-                    >
-                      {tab === "lec" ? "Exceedance curve" : tab === "hist" ? "Loss distribution" : "Sensitivity"}
-                    </button>
-                  ))}
+              <section className="panel" style={{ marginTop: 16 }}>
+                <div className="panel-head">
+                  <h2>FAIR factors</h2>
+                  <span className="chip chip-neutral">
+                    {recorded
+                      ? `Last recorded ${new Date(recorded.createdAt).toLocaleDateString()}`
+                      : "Not yet recorded"}
+                  </span>
                 </div>
-              </div>
-              <ChartPanel
-                tab={activeTab}
-                result={result}
-                sensitivity={sensitivity}
-                running={running}
-              />
-            </div>
-          </div>
+                <div className="panel-body">
+                  <div className="formula">
+                    <b>Loss Event Frequency</b> = Threat Event Frequency <span className="op">×</span>{" "}
+                    Vulnerability
+                    <br />
+                    <b>Loss Magnitude</b> = Primary Loss <span className="op">+</span> (Secondary Loss
+                    Probability <span className="op">×</span> Secondary Loss Magnitude)
+                  </div>
+                  <table className="factor-table">
+                    <thead>
+                      <tr>
+                        <th>Factor</th>
+                        <th>Provenance</th>
+                        <th>Min / Likely / Max</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <FactorRow
+                        name="Threat event frequency"
+                        provenance="modeled"
+                        tri={scenario.tef}
+                        fmt={(x) => `${x.toFixed(0)}/yr`}
+                      />
+                      <FactorRow
+                        name="Vulnerability (baseline)"
+                        provenance="modeled"
+                        tri={scenario.vulnBaseline}
+                        // Sub-10% values need a decimal — 4.6% and 5.4% are
+                        // meaningfully different and both round to "5%".
+                        fmt={(x) => `${(x * 100).toFixed(1)}%`}
+                      />
+                      <FactorRow
+                        name="Primary loss magnitude"
+                        provenance="sourced"
+                        tri={scenario.lossPrimary}
+                        fmt={fmtUsdShort}
+                      />
+                      <FactorRow
+                        name="Secondary loss magnitude"
+                        provenance="sourced"
+                        tri={scenario.lossSecondary}
+                        fmt={fmtUsdShort}
+                      />
+                      <FactorRow
+                        name="Secondary loss probability"
+                        provenance="modeled"
+                        tri={scenario.secProb}
+                        fmt={(x) => `${(x * 100).toFixed(0)}%`}
+                      />
+                    </tbody>
+                  </table>
+                </div>
+              </section>
 
-          <MethodologyCard scenario={scenario} />
+              <Methodology scenario={scenario} />
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
-          <footer className="page-footer">
-            Figures reflect 2025 industry reporting; treat exact dollar values as illustrative for a
-            portfolio demonstration, not a live feed. Every simulation run is persisted — see the{" "}
-            <code>RiskAssessment</code> table for the full history.
-          </footer>
-        </>
-      )}
+/* ------------------------------ pieces ------------------------------ */
+
+function ControlSlider({
+  control,
+  onChange,
+}: {
+  control: ControlPayload;
+  onChange: (key: string, value: number) => void;
+}) {
+  const sourceChip =
+    control.source === "aws-config"
+      ? "chip-success"
+      : control.source === "demo"
+      ? "chip-warning"
+      : "chip-neutral";
+  const sourceLabel =
+    control.source === "aws-config"
+      ? "AWS Config"
+      : control.source === "demo"
+      ? "Demo data"
+      : "Manual";
+
+  return (
+    <div className="control">
+      <div className="control-head">
+        <span className="control-name">{control.name}</span>
+        <span className="control-value">{Math.round(control.coveragePct)}%</span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={1}
+        value={control.coveragePct}
+        onChange={(e) => onChange(control.key, Number(e.target.value))}
+        aria-label={`${control.name} coverage`}
+        style={{
+          background: `linear-gradient(to right, var(--accent) ${control.coveragePct}%, var(--bg-sunken) ${control.coveragePct}%)`,
+        }}
+      />
+      <div className="control-foot">
+        <span className={`chip ${sourceChip}`}>{sourceLabel}</span>
+        <span>weight {(control.weight * 100).toFixed(0)}%</span>
+      </div>
     </div>
   );
 }
 
 function FactorRow({
-  label,
-  badge,
+  name,
+  provenance,
   tri,
   fmt,
 }: {
-  label: string;
-  badge: "sourced" | "modeled";
+  name: string;
+  provenance: "sourced" | "modeled";
   tri: { min: number; mode: number; max: number };
   fmt: (x: number) => string;
 }) {
   return (
-    <div className="factor">
-      <div className="factor-hd">
-        <span className="name">{label}</span>
-        <span className={`badge ${badge}`}>{badge}</span>
-      </div>
-      <div className="tri-bar">
-        <div className="rng" />
-        <div
-          className="mode"
-          style={{ left: `${((tri.mode - tri.min) / (tri.max - tri.min || 1)) * 100}%` }}
-        />
-      </div>
-      <div className="tri-nums">
-        <span>{fmt(tri.min)}</span>
-        <span>{fmt(tri.mode)}</span>
-        <span>{fmt(tri.max)}</span>
-      </div>
-    </div>
+    <tr>
+      <td className="factor-name">{name}</td>
+      <td>
+        <span className={`chip ${provenance === "sourced" ? "chip-accent" : "chip-neutral"}`}>
+          {provenance}
+        </span>
+      </td>
+      <td className="factor-range">
+        {fmt(tri.min)} · <span className="mode">{fmt(tri.mode)}</span> · {fmt(tri.max)}
+      </td>
+    </tr>
   );
 }
 
+/**
+ * Draws the risk-appetite threshold on the exceedance curve: a dashed line at
+ * the board-approved tolerance, with everything beyond it shaded. Written as a
+ * small inline plugin rather than pulling in chartjs-plugin-annotation for one
+ * line and one rectangle.
+ */
+const tolerancePlugin = {
+  id: "toleranceMarker",
+  afterDatasetsDraw(chart: any, _args: any, opts: any) {
+    if (!opts || typeof opts.value !== "number") return;
+    const { ctx, chartArea, scales } = chart;
+    if (!scales?.x || !chartArea) return;
+
+    const x = scales.x.getPixelForValue(opts.value);
+    if (!isFinite(x) || x < chartArea.left) return;
+
+    ctx.save();
+
+    // Shade the region past tolerance — only if it's on-scale.
+    if (x < chartArea.right) {
+      ctx.fillStyle = opts.shade;
+      ctx.fillRect(x, chartArea.top, chartArea.right - x, chartArea.bottom - chartArea.top);
+    }
+
+    if (x <= chartArea.right) {
+      ctx.strokeStyle = opts.color;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x, chartArea.top);
+      ctx.lineTo(x, chartArea.bottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Label flips to the left of the line when it would overflow the canvas.
+      const label = opts.label ?? "Tolerance";
+      ctx.font = "500 11px Inter, system-ui, sans-serif";
+      const w = ctx.measureText(label).width;
+      const flip = x + w + 12 > chartArea.right;
+      ctx.fillStyle = opts.color;
+      ctx.textAlign = flip ? "right" : "left";
+      ctx.fillText(label, flip ? x - 6 : x + 6, chartArea.top + 12);
+    }
+
+    ctx.restore();
+  },
+};
+
 function ChartPanel({
   tab,
-  result,
+  curve,
+  bins,
   sensitivity,
-  running,
+  p95,
+  p99,
+  mean,
+  tolerance,
+  pOverTolerance,
+  withinTolerance,
+  trials,
+  stale,
+  theme,
 }: {
   tab: TabKey;
-  result: RunResult;
-  sensitivity: SensitivityRow[] | null;
-  running: boolean;
+  curve: { x: number; y: number }[];
+  bins: { start: number; count: number }[];
+  sensitivity: { name: string; low: number; high: number; range: number }[] | null;
+  p95: number;
+  p99: number;
+  mean: number;
+  tolerance: number;
+  pOverTolerance: number;
+  withinTolerance: boolean;
+  trials: number;
+  stale: boolean;
+  theme: Theme;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartRef = useRef<any>(null);
-  const [note, setNote] = useState("");
+  const builtForRef = useRef<string>("");
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    const style = getComputedStyle(document.body);
-    const cssVar = (name: string) => style.getPropertyValue(name).trim();
 
-    chartRef.current?.destroy();
+    const style = getComputedStyle(document.body);
+    const v = (name: string) => style.getPropertyValue(name).trim();
+    const accent = v("--accent");
+    const grid = v("--border");
+    const tickColor = v("--text-muted");
+    const textColor = v("--text");
+    const danger = v("--danger");
+    const success = v("--success");
+
+    // The curve itself carries the verdict: green while expected annual loss
+    // sits under the ceiling, red once it doesn't.
+    const curveColor = withinTolerance ? success : danger;
+
+    const signature = `${tab}:${theme}`;
+    const canReuse = chartRef.current && builtForRef.current === signature;
+
+    const common = {
+      responsive: true,
+      maintainAspectRatio: false,
+      // No animation on data updates: the slider already provides the motion,
+      // and a 180ms tween on every keystroke reads as lag.
+      animation: false as const,
+      plugins: { legend: { display: false } },
+    };
 
     if (tab === "lec") {
-      const maxLoss = quantile(result.losses, 0.995) * 1.15 || 1;
-      const steps = 40;
-      const points = Array.from({ length: steps + 1 }, (_, i) => {
-        const x = (maxLoss / steps) * i;
-        const exceed = result.losses.filter((v) => v >= x).length / result.losses.length;
-        return { x, y: exceed * 100 };
-      });
-      chartRef.current = new Chart(canvasRef.current, {
-        type: "line",
-        data: {
-          datasets: [
-            {
-              label: "P(annual loss ≥ x)",
-              data: points,
-              borderColor: cssVar("--accent"),
-              backgroundColor: cssVar("--accent-soft"),
-              fill: true,
-              tension: 0.35,
-              pointRadius: 0,
-              borderWidth: 2,
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          animation: { duration: 200, easing: "easeOutQuad" },
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              callbacks: {
-                title: (items) => "Loss ≥ " + fmtUsd((items[0].parsed as any).x),
-                label: (item) => ((item.parsed as any).y as number).toFixed(1) + "% chance this year",
+      const maxLoss = curve.length ? curve[curve.length - 1].x : 1;
+      const makeFill = () => {
+        const ctx = canvasRef.current?.getContext("2d");
+        const g = ctx?.createLinearGradient(0, 0, 0, 300);
+        g?.addColorStop(0, curveColor + "33");
+        g?.addColorStop(1, curveColor + "05");
+        return g ?? curveColor + "22";
+      };
+
+      if (canReuse) {
+        const ds = chartRef.current.data.datasets[0];
+        ds.data = curve;
+        ds.borderColor = curveColor;
+        ds.backgroundColor = makeFill();
+        chartRef.current.options.scales.x.max = maxLoss;
+        chartRef.current.options.plugins.toleranceMarker.value = tolerance;
+        chartRef.current.options.plugins.toleranceMarker.color = danger;
+        chartRef.current.options.plugins.toleranceMarker.shade = danger + "0f";
+        chartRef.current.update("none");
+      } else {
+        chartRef.current?.destroy();
+        chartRef.current = new Chart(canvasRef.current, {
+          type: "line",
+          plugins: [tolerancePlugin],
+          data: {
+            datasets: [
+              {
+                data: curve,
+                borderColor: curveColor,
+                backgroundColor: makeFill(),
+                fill: true,
+                tension: 0.35,
+                pointRadius: 0,
+                borderWidth: 2,
               },
-            },
+            ],
           },
-          scales: {
-            x: {
-              type: "linear",
-              min: 0,
-              max: maxLoss,
-              ticks: { callback: (v) => fmtUsdShort(v as number), color: cssVar("--text-muted") },
-              grid: { color: cssVar("--border") },
-            },
-            y: {
-              min: 0,
-              max: 100,
-              ticks: { callback: (v) => v + "%", color: cssVar("--text-muted") },
-              grid: { color: cssVar("--border") },
-            },
-          },
-        },
-      });
-      setNote(
-        `Reads as: the chance of losing at least that amount over the next 12 months. P95 sits at ${fmtUsd(
-          result.assessment.p95
-        )}, P99 at ${fmtUsd(result.assessment.p99)}.`
-      );
-    }
-
-    if (tab === "hist") {
-      const max = quantile(result.losses, 0.99) * 1.05 || 1;
-      const bins = 22;
-      const width = max / bins;
-      const counts = new Array(bins).fill(0);
-      result.losses.forEach((v) => {
-        if (v > max) return;
-        const idx = Math.min(bins - 1, Math.floor(v / width));
-        counts[idx]++;
-      });
-      const labels = counts.map((_, i) => fmtUsdShort(i * width));
-      chartRef.current = new Chart(canvasRef.current, {
-        type: "bar",
-        data: {
-          labels,
-          datasets: [
-            {
-              label: "Simulated years",
-              data: counts,
-              backgroundColor: cssVar("--accent2-soft"),
-              borderColor: cssVar("--accent2"),
-              borderWidth: 1,
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          animation: { duration: 200, easing: "easeOutQuad" },
-          plugins: {
-            legend: { display: false },
-            tooltip: { callbacks: { label: (item) => `${(item.parsed as any).y} of ${result.assessment.trials} simulated years` } },
-          },
-          scales: {
-            x: { ticks: { color: cssVar("--text-muted"), maxTicksLimit: 8 }, grid: { display: false } },
-            y: { ticks: { color: cssVar("--text-muted") }, grid: { color: cssVar("--border") } },
-          },
-        },
-      });
-      setNote(
-        `Distribution of ${result.assessment.trials.toLocaleString()} simulated annual-loss totals. Mean (expected annual loss): ${fmtUsd(
-          result.assessment.expectedAnnualLoss
-        )}.`
-      );
-    }
-
-    if (tab === "tornado") {
-      if (!sensitivity) {
-        setNote("Computing sensitivity…");
-        return;
-      }
-      chartRef.current = new Chart(canvasRef.current, {
-        type: "bar",
-        data: {
-          labels: sensitivity.map((r) => r.name),
-          datasets: [
-            {
-              label: "Range of expected annual loss (low → high factor value)",
-              data: sensitivity.map((r) => [Math.min(r.low, r.high), Math.max(r.low, r.high)]) as any,
-              backgroundColor: cssVar("--accent-soft"),
-              borderColor: cssVar("--accent"),
-              borderWidth: 1,
-            },
-          ],
-        },
-        options: {
-          indexAxis: "y",
-          responsive: true,
-          maintainAspectRatio: false,
-          animation: { duration: 200, easing: "easeOutQuad" },
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              callbacks: {
-                label: (item) => {
-                  const raw = item.raw as [number, number];
-                  return `${fmtUsd(raw[0])} – ${fmtUsd(raw[1])}`;
+          options: {
+            ...common,
+            plugins: {
+              legend: { display: false },
+              toleranceMarker: {
+                value: tolerance,
+                color: danger,
+                shade: danger + "0f",
+                label: `Tolerance ${fmtUsdShort(tolerance)}`,
+              },
+              tooltip: {
+                callbacks: {
+                  title: (items: any) => "Loss ≥ " + fmtUsd((items[0].parsed as any).x),
+                  label: (item: any) =>
+                    ((item.parsed as any).y as number).toFixed(1) + "% chance within 12 months",
                 },
               },
             },
-          },
-          scales: {
-            x: { ticks: { callback: (v) => fmtUsdShort(v as number), color: cssVar("--text-muted") }, grid: { color: cssVar("--border") } },
-            y: { ticks: { color: cssVar("--text") }, grid: { display: false } },
-          },
-        },
-      });
-      setNote(
-        "One-at-a-time sensitivity: each bar holds every other factor at its likely value and swings this one from its low to its high estimate. Widest bar drives the most uncertainty in expected annual loss."
-      );
+            scales: {
+              x: {
+                type: "linear",
+                min: 0,
+                max: maxLoss,
+                border: { display: false },
+                ticks: {
+                  callback: (val: any) => fmtUsdShort(val as number),
+                  color: tickColor,
+                  maxTicksLimit: 7,
+                },
+                grid: { color: grid },
+              },
+              y: {
+                min: 0,
+                max: 100,
+                border: { display: false },
+                ticks: { callback: (val: any) => val + "%", color: tickColor, maxTicksLimit: 6 },
+                grid: { color: grid },
+              },
+            },
+          } as any,
+        });
+        builtForRef.current = signature;
+      }
     }
 
+    if (tab === "hist") {
+      const labels = bins.map((b) => fmtUsdShort(b.start));
+      const counts = bins.map((b) => b.count);
+      if (canReuse) {
+        chartRef.current.data.labels = labels;
+        chartRef.current.data.datasets[0].data = counts;
+        chartRef.current.update("none");
+      } else {
+        chartRef.current?.destroy();
+        chartRef.current = new Chart(canvasRef.current, {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [
+              { data: counts, backgroundColor: accent + "cc", borderRadius: 3, borderWidth: 0 },
+            ],
+          },
+          options: {
+            ...common,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: (item: any) =>
+                    `${(item.parsed as any).y} of ${trials.toLocaleString()} simulated years`,
+                },
+              },
+            },
+            scales: {
+              x: {
+                border: { display: false },
+                ticks: { color: tickColor, maxTicksLimit: 8 },
+                grid: { display: false },
+              },
+              y: {
+                border: { display: false },
+                ticks: { color: tickColor, maxTicksLimit: 6 },
+                grid: { color: grid },
+              },
+            },
+          } as any,
+        });
+        builtForRef.current = signature;
+      }
+    }
+
+    if (tab === "tornado" && sensitivity) {
+      const labels = sensitivity.map((r) => r.name);
+      const ranges = sensitivity.map((r) => [Math.min(r.low, r.high), Math.max(r.low, r.high)]);
+      if (canReuse) {
+        chartRef.current.data.labels = labels;
+        chartRef.current.data.datasets[0].data = ranges;
+        chartRef.current.update("none");
+      } else {
+        chartRef.current?.destroy();
+        chartRef.current = new Chart(canvasRef.current, {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [
+              {
+                data: ranges as any,
+                backgroundColor: accent + "cc",
+                borderRadius: 3,
+                borderWidth: 0,
+              },
+            ],
+          },
+          options: {
+            ...common,
+            indexAxis: "y",
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: (item: any) => {
+                    const raw = item.raw as [number, number];
+                    return `${fmtUsd(raw[0])} – ${fmtUsd(raw[1])}`;
+                  },
+                },
+              },
+            },
+            scales: {
+              x: {
+                border: { display: false },
+                ticks: {
+                  callback: (val: any) => fmtUsdShort(val as number),
+                  color: tickColor,
+                  maxTicksLimit: 6,
+                },
+                grid: { color: grid },
+              },
+              y: {
+                border: { display: false },
+                ticks: { color: textColor },
+                grid: { display: false },
+              },
+            },
+          } as any,
+        });
+        builtForRef.current = signature;
+      }
+    }
+  }, [tab, curve, bins, sensitivity, theme, trials, tolerance, withinTolerance]);
+
+  useEffect(() => {
     return () => {
       chartRef.current?.destroy();
+      chartRef.current = null;
+      builtForRef.current = "";
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, result, sensitivity]);
+  }, []);
+
+  const caption =
+    tab === "lec"
+      ? `The probability of losing at least a given amount within 12 months. The shaded region sits beyond the ${fmtUsdShort(
+          tolerance
+        )} tolerance ceiling — ${pOverTolerance.toFixed(
+          1
+        )}% of simulated years land there. P95 falls at ${fmtUsd(p95)}, P99 at ${fmtUsd(p99)}.`
+      : tab === "hist"
+      ? `Distribution of ${trials.toLocaleString()} simulated annual-loss totals. The long right tail is why the mean of ${fmtUsd(
+          mean
+        )} sits well above the typical year.`
+      : "Each bar holds every other factor at its likely value and swings this one from its low to its high estimate. The widest bar contributes the most uncertainty.";
 
   return (
     <>
-      <div className={`chart-box${running ? " loading" : ""}`}>
+      <div className={`chart-wrap${stale ? " is-stale" : ""}`}>
         <canvas ref={canvasRef} />
       </div>
-      <p className="chart-note">{note}</p>
+      <p className="chart-caption">{caption}</p>
     </>
   );
 }
 
-function MethodologyCard({ scenario }: { scenario: ScenarioPayload }) {
+function Methodology({ scenario }: { scenario: ScenarioPayload }) {
   return (
-    <div className="card" style={{ marginTop: 18 }}>
-      <div className="card-hd">
-        <h2>Methodology &amp; assumptions</h2>
+    <section className="panel" id="methodology" style={{ marginTop: 16 }}>
+      <div className="panel-head">
+        <h2>Methodology</h2>
+        <span className="chip chip-neutral">Open Group FAIR</span>
       </div>
-      <div className="card-bd">
-        <div className="method-grid">
+      <div className="panel-body">
+        <div className="method-cols">
           <div>
-            <h3>What&apos;s sourced</h3>
+            <h3>Sourced inputs</h3>
             <p>
-              Loss magnitude is calibrated to this industry&apos;s average total cost of a data breach,
-              split into primary vs. secondary loss using the global cost-category breakdown — both from{" "}
-              <b>{scenario.sourceCitation}</b>.
+              Loss magnitude is calibrated to this industry&apos;s average total cost of a data
+              breach, split into primary and secondary loss using the report&apos;s own
+              cost-category breakdown — both from {scenario.sourceCitation}.
             </p>
             <ul>
-              <li>Industry average total cost (IBM Fig. 3), by profile.</li>
-              <li>Global cost-category split: lost business, post-breach response, notification.</li>
+              <li>Industry average total cost, per profile.</li>
+              <li>Cost-category split: lost business, post-breach response, notification.</li>
               <li>
-                Context: ransomware was present in 44% of confirmed breaches in the 2025 Verizon DBIR,
-                up from 32% the year before — shown for reference, not built into the magnitude figures.
+                Ransomware appeared in 44% of confirmed breaches in the 2025 Verizon DBIR, up from
+                32% — context only, not an input to the magnitude figures.
               </li>
             </ul>
           </div>
           <div>
-            <h3>What&apos;s modeled</h3>
+            <h3>Modeled assumptions</h3>
             <p>
-              Threat Event Frequency and the Vulnerability baseline aren&apos;t published at this
-              granularity anywhere, so they&apos;re explicit, editable assumptions rather than disguised
-              as data — recalibrate them against your own SIEM/EDR telemetry.
+              Threat event frequency and the vulnerability baseline aren&apos;t published at this
+              granularity, so they&apos;re stated as explicit assumptions rather than dressed up as
+              data. Recalibrate them against your own detection telemetry.
             </p>
             <p>
-              Every factor in the left panel carries a <span className="badge sourced">sourced</span> or{" "}
-              <span className="badge modeled">modeled</span> tag, and every control&apos;s coverage
-              carries its own <span className="badge live">aws-config</span> /{" "}
-              <span className="badge modeled">manual</span> / <span className="badge demo">demo</span> source
-              tag.
+              Every factor carries a provenance chip, and every control&apos;s coverage records
+              whether it came from AWS Config, manual entry, or demo data.
             </p>
           </div>
         </div>
-        <div className="method-grid">
+
+        <div className="method-cols" style={{ marginTop: 20 }}>
           <div>
-            <h3>How the simulation runs</h3>
+            <h3>Exploring vs. recording</h3>
             <p>
-              Each of 8,000 trials represents one simulated year, computed server-side and persisted as a{" "}
-              <code>RiskAssessment</code> row. Threat Event Frequency and Vulnerability are drawn from
-              triangular distributions and multiplied into that year&apos;s Loss Event Frequency; the
-              event count is then drawn from a Poisson distribution with that mean. The exceedance curve
-              and percentiles are read directly off the resulting simulated totals.
+              Moving a control slider re-runs the model in the browser at{" "}
+              {PREVIEW_TRIALS.toLocaleString()} trials, so the charts respond immediately and
+              nothing is written. Recording an assessment runs the full simulation server-side and
+              writes an immutable row to the register — the audit trail holds deliberate
+              assessments, not every adjustment.
             </p>
           </div>
           <div>
-            <h3>Where this simplifies real FAIR practice</h3>
+            <h3>Known simplifications</h3>
             <p>
-              A full FAIR analysis samples from Beta-PERT distributions and separates threat capability
-              from control (resistance) strength. This model uses triangular distributions as a lighter
-              approximation, and folds three named controls into one Vulnerability multiplier — built to
-              show the mechanics clearly, not to replace a calibrated tool for a real engagement.
+              Full FAIR practice samples from Beta-PERT distributions and separates threat
+              capability from resistance strength. This model uses triangular distributions and
+              folds three controls into a single vulnerability multiplier — built to make the
+              mechanics legible, not to replace a calibrated commercial tool.
             </p>
           </div>
         </div>
-        <p className="cite">
+
+        <p className="sources">
           Sources: IBM Security,{" "}
-          <a href="https://www.ibm.com/think/x-force/2025-cost-of-a-data-breach-navigating-ai" target="_blank" rel="noopener noreferrer">
+          <a
+            href="https://www.ibm.com/think/x-force/2025-cost-of-a-data-breach-navigating-ai"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             Cost of a Data Breach Report 2025
           </a>{" "}
           · Verizon,{" "}
-          <a href="https://www.verizon.com/business/resources/reports/2025-dbir-data-breach-investigations-report.pdf" target="_blank" rel="noopener noreferrer">
+          <a
+            href="https://www.verizon.com/business/resources/reports/2025-dbir-data-breach-investigations-report.pdf"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             2025 Data Breach Investigations Report
           </a>{" "}
-          · Framework: The Open Group, FAIR (Factor Analysis of Information Risk).
+          · Framework: The Open Group, FAIR.
         </p>
       </div>
-    </div>
+    </section>
   );
 }
