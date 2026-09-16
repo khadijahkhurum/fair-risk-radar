@@ -19,8 +19,13 @@
 import {
   ConfigServiceClient,
   GetComplianceDetailsByConfigRuleCommand,
-  ComplianceType,
 } from "@aws-sdk/client-config-service";
+
+// AWS Config returns these as plain strings on the wire. Comparing against the
+// literals (rather than the SDK's ComplianceType const, whose key casing has
+// changed between SDK versions) keeps this stable across upgrades.
+const COMPLIANT = "COMPLIANT";
+const NON_COMPLIANT = "NON_COMPLIANT";
 
 export type ControlKey = "mfa" | "patch" | "kms";
 
@@ -55,9 +60,9 @@ async function ruleCoveragePercent(client: ConfigServiceClient, ruleName: string
     );
     for (const result of res.EvaluationResults ?? []) {
       const type = result.ComplianceType;
-      if (type === ComplianceType.COMPLIANT || type === ComplianceType.NON_COMPLIANT) {
+      if (type === COMPLIANT || type === NON_COMPLIANT) {
         total++;
-        if (type === ComplianceType.COMPLIANT) compliant++;
+        if (type === COMPLIANT) compliant++;
       }
     }
     nextToken = res.NextToken;
