@@ -351,7 +351,7 @@ function ChartPanel({
   running: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const chartRef = useRef<Chart | null>(null);
+  const chartRef = useRef<any>(null);
   const [note, setNote] = useState("");
 
   useEffect(() => {
@@ -393,8 +393,8 @@ function ChartPanel({
             legend: { display: false },
             tooltip: {
               callbacks: {
-                title: (items) => "Loss ≥ " + fmtUsd(items[0].parsed.x),
-                label: (item) => (item.parsed.y as number).toFixed(1) + "% chance this year",
+                title: (items) => "Loss ≥ " + fmtUsd((items[0].parsed as any).x),
+                label: (item) => ((item.parsed as any).y as number).toFixed(1) + "% chance this year",
               },
             },
           },
@@ -453,7 +453,7 @@ function ChartPanel({
           animation: { duration: 200, easing: "easeOutQuad" },
           plugins: {
             legend: { display: false },
-            tooltip: { callbacks: { label: (item) => `${item.parsed.y} of ${result.assessment.trials} simulated years` } },
+            tooltip: { callbacks: { label: (item) => `${(item.parsed as any).y} of ${result.assessment.trials} simulated years` } },
           },
           scales: {
             x: { ticks: { color: cssVar("--text-muted"), maxTicksLimit: 8 }, grid: { display: false } },
