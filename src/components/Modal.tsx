@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 export function Modal({
   title,
@@ -13,6 +14,9 @@ export function Modal({
   children: React.ReactNode;
   wide?: boolean;
 }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -21,7 +25,13 @@ export function Modal({
     return () => document.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
-  return (
+  // Portal to <body>: every glass card is its own stacking context now
+  // (backdrop-filter does that), so a modal rendered inside a page would be
+  // trapped under whichever card sits above it. Body is the only place a
+  // fixed overlay is reliably on top.
+  if (!mounted) return null;
+
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
       onMouseDown={(e) => {
@@ -39,6 +49,7 @@ export function Modal({
         </div>
         <div className="p-5">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -148,6 +148,28 @@ td.bg-surface {
   transition: box-shadow 0.4s var(--ease-apple), background-color 0.4s var(--ease-apple);
 }
 
+/* Popovers were being painted UNDER the next card down. Cause: backdrop-filter
+   creates a stacking context, so every glass card is now its own context —
+   a menu's z-index can't escape the card it lives in, and later siblings paint
+   on top. Cards stack in reverse DOM order so an earlier section's menu always
+   clears the sections below it.
+   ponytail: blunt but global — fixes every dropdown on every page with one
+   rule. Swap for a React portal on the menu if anything ever needs to overlap
+   upward. */
+main > * {
+  position: relative;
+}
+main > *:nth-child(1) { z-index: 40; }
+main > *:nth-child(2) { z-index: 36; }
+main > *:nth-child(3) { z-index: 32; }
+main > *:nth-child(4) { z-index: 28; }
+main > *:nth-child(5) { z-index: 24; }
+main > *:nth-child(6) { z-index: 20; }
+main > *:nth-child(7) { z-index: 16; }
+main > *:nth-child(8) { z-index: 12; }
+main > *:nth-child(9) { z-index: 8; }
+main > *:nth-child(n + 10) { z-index: 4; }
+
 /* ── Entrance choreography ──────────────────────────────────────────────── */
 
 @keyframes rise {
