@@ -305,11 +305,15 @@ export function Dashboard() {
     return toleranceForTargetProbability(latestRun.result.lec, TARGET_EXCEED_PROBABILITY);
   }, [latestRun]);
 
-  // Seed the what-if panel from the real latest run whenever it changes,
-  // so opening it starts from "what you actually have" rather than zero.
+  // Seed the what-if panel from the real latest run whenever it changes, but
+  // nudged +10 points above today's actual coverage (not equal to it): if the
+  // panel opened at exactly today's numbers, "expected annual loss avoided"
+  // and ROSI would both start at ~$0 by construction (comparing a state to
+  // itself), which reads as broken math rather than as "you haven't changed
+  // anything yet."
   useEffect(() => {
     if (!latestRun) return;
-    setWhatIfCoverage(Math.round(latestRun.avgControlCoveragePct));
+    setWhatIfCoverage(Math.min(100, Math.round(latestRun.avgControlCoveragePct) + 10));
     setWhatIfThreatIds(latestRun.threatIds);
   }, [latestRun]);
 

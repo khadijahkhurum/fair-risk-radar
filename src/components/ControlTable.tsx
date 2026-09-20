@@ -137,7 +137,8 @@ export function ControlTable({
                             setEditingId(row.id);
                             setDraftPct(String(row.coveragePct ?? 0));
                           }}
-                          className="tabular-nums text-slate-200 hover:text-accent2 transition-colors"
+                          title="Click to override this control's coverage %"
+                          className="tabular-nums text-slate-200 hover:text-accent2 underline decoration-dotted decoration-slate-600 underline-offset-4 transition-colors"
                         >
                           {(row.coveragePct ?? 0).toFixed(0)}%
                         </button>
