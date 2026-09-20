@@ -94,7 +94,14 @@ export default function RoiPage() {
         );
         const baselineAle = results[0].result.meanAle; // coverage = 0
         const points: CurvePoint[] = results.map(({ coverage, result }) => {
-          const cost = (cost100 * coverage) / 100;
+          // Cost scales with the SQUARE of coverage, not linearly: the first
+          // half of coverage is the cheap, high-leverage fixes (MFA, patch
+          // management); closing the last gap costs disproportionately more.
+          // A linear cost curve against a roughly-linear risk-reduction curve
+          // can only ever "optimize" at 0% or 100% — never in between — which
+          // is a degenerate result, not a real trade-off. Convex cost is what
+          // makes an interior optimum possible at all.
+          const cost = cost100 * (coverage / 100) ** 2;
           const riskAvoided = baselineAle - result.meanAle;
           const netBenefit = riskAvoided - cost;
           const rosiPct = cost > 0 ? (netBenefit / cost) * 100 : null;
@@ -245,8 +252,8 @@ export default function RoiPage() {
           </label>
         </div>
         <p className="text-[11px] text-slate-500 mt-3">
-          Cost is assumed to scale linearly with coverage (a modeling simplification, not a sourced budget curve) — enter
-          what full remediation would realistically cost and the rest is interpolated.
+          Cost is modeled as scaling with the square of coverage — cheap early wins, disproportionately expensive to
+          close the last gap — not a sourced budget curve. Enter what full (100%) remediation would realistically cost.
         </p>
       </div>
 
@@ -264,8 +271,12 @@ export default function RoiPage() {
             Net benefit peaks here at {currencyFull(optimalPoint.netBenefit)}/year — {currencyFull(optimalPoint.riskAvoided)}{" "}
             in avoided loss against {currencyFull(optimalPoint.cost)} in control spend
             {optimalPoint.rosiPct !== null ? ` (${optimalPoint.rosiPct >= 0 ? "+" : ""}${optimalPoint.rosiPct.toFixed(0)}% ROSI)` : ""}
-            . Pushing coverage past this point costs more than the risk it removes — the classic diminishing-returns
-            curve behind every &quot;how much security is enough&quot; conversation.
+            .{" "}
+            {optimalPoint.coverage < 100
+              ? `Pushing coverage past this point costs more than the risk it removes — the classic diminishing-returns curve behind every "how much security is enough" conversation.`
+              : `At this cost, full coverage still returns more than it spends at every step — this control investment dominates the risk regardless of how far you push it. To see an interior trade-off point instead of a corner solution, try a higher cost estimate (roughly ${currencyFull(
+                  optimalPoint.riskAvoided * 0.6
+                )}+) — that's the range where the model starts weighing cost against risk instead of one obviously winning.`}
           </p>
         </div>
       )}
