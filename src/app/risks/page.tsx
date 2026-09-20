@@ -10,7 +10,6 @@ import { riskScoreLabel } from "@/lib/risk-rating";
 interface Scenario {
   id: string;
   name: string;
-  lossMode: number;
 }
 interface Threat {
   id: string;

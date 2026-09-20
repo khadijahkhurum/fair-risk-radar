@@ -71,9 +71,17 @@ model Scenario {
   industry          String
   tefLambda         Float // Threat Event Frequency: mean events/year (Poisson)
   vulnerability     Float // probability a threat event becomes a loss event, 0-1
-  lossMin           Float // triangular distribution, USD
-  lossMode          Float
-  lossMax           Float
+  // Full FAIR loss magnitude: Primary Loss (certain once a loss event occurs —
+  // detection/escalation, incident response, notification) plus a Secondary
+  // Loss (lost business/reputational) that only materializes some fraction of
+  // the time. Each is its own triangular distribution, USD.
+  primaryLossMin           Float
+  primaryLossMode          Float
+  primaryLossMax           Float
+  secondaryLossProbability Float // 0-1: P(secondary loss occurs | a loss event occurred)
+  secondaryLossMin         Float
+  secondaryLossMode        Float
+  secondaryLossMax         Float
   sourceNote        String // what's sourced vs. modeled, shown in the UI
   assessments       RiskAssessment[]
 }

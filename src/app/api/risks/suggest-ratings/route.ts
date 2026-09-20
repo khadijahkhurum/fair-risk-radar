@@ -5,7 +5,7 @@
 // creation form, always overridable by hand.
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { scenarios } from "@/lib/scenarios";
+import { scenarios, expectedLossPerEvent } from "@/lib/scenarios";
 import { threats } from "@/lib/threats";
 import { runFairSimulation } from "@/lib/fair";
 import { ratingFromAle, ratingFromProbability } from "@/lib/risk-rating";
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
         ? latestCoverage.reduce((sum, c) => sum + c.coveragePct, 0) / latestCoverage.length
         : 0;
 
-    const tolerance = typeof riskTolerance === "number" ? riskTolerance : scenario.lossMode;
+    const tolerance = typeof riskTolerance === "number" ? riskTolerance : expectedLossPerEvent(scenario);
 
     const inherent = runFairSimulation(scenario, selectedThreats, 0, tolerance, 4000);
     const residual = runFairSimulation(scenario, selectedThreats, avgControlCoveragePct, tolerance, 4000);

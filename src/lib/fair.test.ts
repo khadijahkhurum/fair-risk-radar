@@ -8,9 +8,13 @@ import { runFairSimulation } from "./fair";
 const scenario = {
   tefLambda: 10,
   vulnerability: 0.3,
-  lossMin: 1_000_000,
-  lossMode: 2_000_000,
-  lossMax: 5_000_000,
+  primaryLossMin: 700_000,
+  primaryLossMode: 1_400_000,
+  primaryLossMax: 3_500_000,
+  secondaryLossProbability: 0.7,
+  secondaryLossMin: 300_000,
+  secondaryLossMode: 600_000,
+  secondaryLossMax: 1_500_000,
 };
 
 test("runFairSimulation returns internally consistent percentiles", () => {

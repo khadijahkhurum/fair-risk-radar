@@ -11,9 +11,9 @@ interface Scenario {
   industry: string;
   tefLambda: number;
   vulnerability: number;
-  lossMin: number;
-  lossMode: number;
-  lossMax: number;
+  primaryLossMode: number;
+  secondaryLossProbability: number;
+  secondaryLossMode: number;
   sourceNote: string;
 }
 interface Threat {
@@ -179,7 +179,9 @@ export function Dashboard() {
       setThreats(data.threats);
       if (data.scenarios[0]) {
         setScenarioId((prev) => prev || data.scenarios[0].id);
-        setRiskTolerance((prev) => prev || String(Math.round(data.scenarios[0].lossMode)));
+        const s0 = data.scenarios[0];
+        const typicalLoss = s0.primaryLossMode + s0.secondaryLossProbability * s0.secondaryLossMode;
+        setRiskTolerance((prev) => prev || String(Math.round(typicalLoss)));
       }
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Failed to load dashboard data");
@@ -315,10 +317,16 @@ export function Dashboard() {
     return () => clearTimeout(handle);
   }, [whatIfOpen, scenarioId, whatIfThreatIds, whatIfCoverage, toleranceValue]);
 
-  // Computed once per scenario/tolerance (not on every drag) — the absolute
-  // best case, independent of whatever the sliders currently say.
+  // Computed once per scenario/tolerance (not on every drag) — the best case
+  // actually achievable through controls: 100% coverage, holding TODAY'S
+  // real threat landscape fixed. Threats aren't a checkbox you get to
+  // uncheck in reality — phishing doesn't stop existing because you'd like
+  // a better number — so the ceiling check must never zero them out. The
+  // per-threat checkboxes below stay available for exploring which threat
+  // matters most, but the "here's what's actually achievable" figure only
+  // ever varies the lever an org actually controls: control investment.
   useEffect(() => {
-    if (!whatIfOpen || !scenarioId || toleranceValue === null) {
+    if (!whatIfOpen || !scenarioId || toleranceValue === null || !latestRun) {
       setBestCaseFloor(null);
       return;
     }
@@ -328,7 +336,12 @@ export function Dashboard() {
         const res = await fetch("/api/risk/whatif", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scenarioId, threatIds: [], riskTolerance: toleranceValue, coveragePct: 100 }),
+          body: JSON.stringify({
+            scenarioId,
+            threatIds: latestRun.threatIds,
+            riskTolerance: toleranceValue,
+            coveragePct: 100,
+          }),
         });
         const data = await res.json();
         if (!cancelled && res.ok) setBestCaseFloor(data.result.pExceedTolerance);
@@ -339,7 +352,7 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [whatIfOpen, scenarioId, toleranceValue]);
+  }, [whatIfOpen, scenarioId, toleranceValue, latestRun]);
 
   const whatIfExceedProbability = whatIfResult?.pExceedTolerance ?? null;
   const whatIfIsGreen = whatIfExceedProbability !== null && whatIfExceedProbability <= TARGET_EXCEED_PROBABILITY;
@@ -609,20 +622,22 @@ export function Dashboard() {
               <div className="mt-3 border-t border-border pt-3">
                 {bestCaseFloor > TARGET_EXCEED_PROBABILITY ? (
                   <p className="text-xs text-amber-400">
-                    Ceiling check: even at 100% control coverage with no threats added, this scenario still exceeds
-                    tolerance {(bestCaseFloor * 100).toFixed(1)}% of the time. Green isn&apos;t reachable at{" "}
-                    {currencyFull(toleranceValue ?? 0)} through controls alone — raise the tolerance above, or treat
-                    this as a case for risk transfer (insurance) rather than more controls.
+                    Ceiling check: even at 100% control coverage, keeping today&apos;s full threat set in scope, this
+                    scenario still exceeds tolerance {(bestCaseFloor * 100).toFixed(1)}% of the time. Green
+                    isn&apos;t achievable at {currencyFull(toleranceValue ?? 0)} through control investment alone —
+                    raise the tolerance to a realistic level, or treat the remainder as a case for risk transfer
+                    (insurance) rather than more controls.
                   </p>
                 ) : (
                   <p className="text-xs text-slate-400">
-                    Ceiling check: at 100% control coverage with no threats added, this scenario drops to{" "}
+                    Ceiling check: at 100% control coverage, keeping today&apos;s full threat set in scope, this
+                    scenario drops to{" "}
                     <span className="text-emerald-400 font-medium">{(bestCaseFloor * 100).toFixed(1)}%</span> — green
-                    is reachable here.{" "}
+                    is achievable through control investment alone, without pretending any threat away.{" "}
                     <button
                       onClick={() => {
                         setWhatIfCoverage(100);
-                        setWhatIfThreatIds([]);
+                        setWhatIfThreatIds(latestRun.threatIds);
                       }}
                       className="text-accent2 underline hover:no-underline"
                     >
@@ -693,11 +708,13 @@ export function Dashboard() {
                     {whatIfExceedProbability !== null ? `${(whatIfExceedProbability * 100).toFixed(1)}%` : "—"}
                   </div>
                   <p className="text-xs text-slate-400 mt-2">
-                    {whatIfIsGreen
+                    {whatIfIsGreen && whatIfThreatIds.length === 0
+                      ? `At ${whatIfCoverage}% control coverage this drops under the ${(TARGET_EXCEED_PROBABILITY * 100).toFixed(0)}% bar — but only because every threat is unticked. No real threat landscape is zero; re-tick at least the threats this scenario actually faces before treating this as a plan.`
+                      : whatIfIsGreen
                       ? `At ${whatIfCoverage}% control coverage with ${whatIfThreatIds.length} threat${
                           whatIfThreatIds.length === 1 ? "" : "s"
-                        } in scope, this drops under the ${(TARGET_EXCEED_PROBABILITY * 100).toFixed(0)}% bar — that's the combination to take to the board as the mitigation plan.`
-                      : `vs. ${liveExceedProbability !== null ? `${(liveExceedProbability * 100).toFixed(1)}%` : "—"} today. Drag coverage up or drop a threat to see what it takes to go green.`}
+                        } still in scope, this drops under the ${(TARGET_EXCEED_PROBABILITY * 100).toFixed(0)}% bar — that's the combination to take to the board as the mitigation plan.`
+                      : `vs. ${liveExceedProbability !== null ? `${(liveExceedProbability * 100).toFixed(1)}%` : "—"} today. Drag coverage up to see what it takes to go green — dropping a threat only tells you its weight, it isn't a real mitigation.`}
                   </p>
                 </div>
               </div>

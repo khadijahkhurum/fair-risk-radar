@@ -2,9 +2,12 @@
 //
 // Model: for each simulated year, sample a threat event count from a Poisson
 // distribution (Threat Event Frequency), then for each event roll against
-// Vulnerability to decide if it becomes a loss event, and if so sample loss
-// magnitude from a triangular distribution. Annualized Loss Expectancy (ALE)
-// is the resulting per-year loss across all trials.
+// Vulnerability to decide if it becomes a loss event. Loss magnitude follows
+// FAIR's actual taxonomy: Primary Loss (certain once a loss event occurs)
+// plus a Secondary Loss (lost business/reputational) that only layers on
+// some fraction of the time — not a single flat triangular range.
+// Annualized Loss Expectancy (ALE) is the resulting per-year loss across all
+// trials.
 //
 // ponytail: triangular approximation instead of Beta-PERT — FAIR practitioners
 // often prefer PERT for its smoother tails, but triangular needs only
@@ -68,7 +71,18 @@ export interface FairResult {
   pExceedTolerance: number | null;
 }
 
-type ScenarioInput = Pick<Scenario, "tefLambda" | "vulnerability" | "lossMin" | "lossMode" | "lossMax">;
+type ScenarioInput = Pick<
+  Scenario,
+  | "tefLambda"
+  | "vulnerability"
+  | "primaryLossMin"
+  | "primaryLossMode"
+  | "primaryLossMax"
+  | "secondaryLossProbability"
+  | "secondaryLossMin"
+  | "secondaryLossMode"
+  | "secondaryLossMax"
+>;
 type ThreatInput = Pick<Threat, "tefMultiplier" | "vulnerabilityMultiplier">;
 
 // Each selected threat is modeled as its own independent threat community
@@ -106,7 +120,18 @@ export function runFairSimulation(
       const eventCount = samplePoisson(community.tefLambda);
       for (let e = 0; e < eventCount; e++) {
         if (Math.random() < community.vulnerability) {
-          annualLoss += sampleTriangular(scenario.lossMin, scenario.lossMode, scenario.lossMax);
+          // Full FAIR loss magnitude: Primary Loss always applies once a loss
+          // event occurs; Secondary Loss (lost business/reputational) only
+          // layers on some fraction of the time.
+          let eventLoss = sampleTriangular(scenario.primaryLossMin, scenario.primaryLossMode, scenario.primaryLossMax);
+          if (Math.random() < scenario.secondaryLossProbability) {
+            eventLoss += sampleTriangular(
+              scenario.secondaryLossMin,
+              scenario.secondaryLossMode,
+              scenario.secondaryLossMax
+            );
+          }
+          annualLoss += eventLoss;
         }
       }
     }
