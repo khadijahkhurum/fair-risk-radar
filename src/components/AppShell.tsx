@@ -165,7 +165,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* key on pathname so the entrance choreography replays on navigation.
           pl-16 clears the floating burger on small screens; on desktop the
           sidebar itself holds that space. */}
-      <main key={pathname} className="flex-1 min-w-0 pl-16 pr-6 lg:px-8 py-8 lg:py-10 max-w-6xl mx-auto w-full">
+      <main key={pathname} className="flex-1 min-w-0 pl-[60px] pr-4 sm:pr-6 lg:px-8 py-8 lg:py-10 max-w-6xl mx-auto w-full">
         {children}
       </main>
     </div>

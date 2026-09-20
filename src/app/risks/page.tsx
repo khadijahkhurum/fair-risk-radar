@@ -320,7 +320,7 @@ function NewRiskModal({
           <span className="text-xs font-medium text-slate-400">Description</span>
           <textarea className="select" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
         </label>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-slate-400">Owner</span>
             <input className="select" value={ownerName} onChange={(e) => setOwnerName(e.target.value)} placeholder="e.g. Platform Team" />
@@ -337,7 +337,7 @@ function NewRiskModal({
             />
           </label>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <SelectDropdown
             label="Scenario"
             options={scenarios.map((s) => ({ id: s.id, label: s.name }))}
@@ -365,7 +365,7 @@ function NewRiskModal({
               {suggesting ? "Running simulation…" : "Suggest from FAIR model"}
             </button>
           </div>
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <RatingField label="Inherent Likelihood" value={ratings.il} onChange={(v) => setRatings((r) => ({ ...r, il: v }))} />
             <RatingField label="Inherent Impact" value={ratings.ii} onChange={(v) => setRatings((r) => ({ ...r, ii: v }))} />
             <RatingField label="Residual Likelihood" value={ratings.rl} onChange={(v) => setRatings((r) => ({ ...r, rl: v }))} />
