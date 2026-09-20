@@ -43,6 +43,54 @@ const DEMO_STARTING_COVERAGE: Record<string, number> = {
   "data-encryption-at-rest": 90,
 };
 
+// One representative evidence file per control so the Evidence viewer isn't
+// an empty box on first load — the same DEMO labeling as coverage above.
+// Plain CSV text; parsedRows is derived from it below rather than hand-kept
+// in sync as a second copy of the same data.
+const DEMO_EVIDENCE: Record<string, { filename: string; csv: string }> = {
+  "mfa-enforcement": {
+    filename: "mfa-enrollment-export.csv",
+    csv: "user,method,enrolled_at\nalice@corp.com,TOTP,2026-01-14\nbob@corp.com,WebAuthn,2026-01-20\ncarol@corp.com,TOTP,2026-02-02",
+  },
+  "patch-management": {
+    filename: "patch-compliance-report.csv",
+    csv: "host,os,last_patched,status\nweb-01,Ubuntu 22.04,2026-08-30,compliant\nweb-02,Ubuntu 22.04,2026-08-30,compliant\ndb-01,RHEL 9,2026-08-15,overdue",
+  },
+  "key-rotation": {
+    filename: "kms-key-rotation-log.csv",
+    csv: "key_id,last_rotated,rotation_interval_days\nkms-prod-primary,2026-07-01,90\nkms-prod-backup,2026-06-15,90",
+  },
+  "access-review": {
+    filename: "quarterly-access-review.csv",
+    csv: "user,system,access_level,reviewed_by,decision\ndave@corp.com,prod-db,read-write,security-team,retained\neve@corp.com,prod-db,read-only,security-team,revoked",
+  },
+  "logging-monitoring": {
+    filename: "siem-coverage-summary.csv",
+    csv: "source,ingested,alert_rules\naws-cloudtrail,yes,12\nvpc-flow-logs,yes,6\napp-audit-log,yes,9",
+  },
+  "vendor-risk-assessment": {
+    filename: "vendor-risk-register.csv",
+    csv: "vendor,data_access,last_assessed,risk_rating\nStripe,payment data,2026-05-01,Low\nSendGrid,email metadata,2026-04-10,Low\nAcmeAnalytics,usage data,2026-03-02,Moderate",
+  },
+  "incident-response-plan": {
+    filename: "ir-tabletop-test-log.csv",
+    csv: "date,scenario,participants,outcome\n2026-06-12,Ransomware tabletop,8,Playbook updated\n2026-02-20,Data exfil tabletop,6,No gaps found",
+  },
+  "data-encryption-at-rest": {
+    filename: "encryption-at-rest-audit.csv",
+    csv: "resource,encryption,algorithm\nprod-rds,enabled,AES-256\nprod-s3-primary,enabled,AES-256\nbackups-s3,enabled,AES-256",
+  },
+};
+
+function parseCsvToRows(csv: string): Record<string, string>[] {
+  const [headerLine, ...lines] = csv.trim().split("\n");
+  const headers = headerLine.split(",");
+  return lines.map((line) => {
+    const values = line.split(",");
+    return Object.fromEntries(headers.map((h, i) => [h, values[i] ?? ""]));
+  });
+}
+
 async function main() {
   const catalogPath = join(__dirname, "..", "controls", "catalog.yaml");
   const catalog = load(readFileSync(catalogPath, "utf-8")) as CatalogEntry[];
@@ -88,6 +136,25 @@ async function main() {
           source: "DEMO",
         },
       });
+    }
+
+    const demoEvidence = DEMO_EVIDENCE[entry.id];
+    if (demoEvidence) {
+      const existingEvidence = await prisma.evidence.findFirst({ where: { controlId: entry.id } });
+      if (!existingEvidence) {
+        const rows = parseCsvToRows(demoEvidence.csv);
+        await prisma.evidence.create({
+          data: {
+            controlId: entry.id,
+            filename: demoEvidence.filename,
+            contentType: "csv",
+            sizeBytes: Buffer.byteLength(demoEvidence.csv, "utf-8"),
+            summary: `CSV, ${rows.length} rows (DEMO)`,
+            parsedRows: rows,
+            rawText: demoEvidence.csv,
+          },
+        });
+      }
     }
   }
 
