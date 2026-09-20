@@ -16,6 +16,7 @@ import type { ChartConfiguration } from "chart.js";
 import { AppShell } from "@/components/AppShell";
 import { ChartCanvas } from "@/components/ChartCanvas";
 import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
+import { toleranceForTargetProbability, type LecPoint } from "@/lib/lec";
 
 interface Scenario {
   id: string;
@@ -37,6 +38,7 @@ interface CurvePoint {
   riskAvoided: number;
   netBenefit: number;
   benefitCostRatio: number | null;
+  lec: LecPoint[];
 }
 
 const COVERAGE_STEPS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
@@ -119,7 +121,10 @@ export default function RoiPage() {
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error ?? "Simulation failed");
-            return { coverage, result: data.result as { meanAle: number; pExceedTolerance: number | null } };
+            return {
+              coverage,
+              result: data.result as { meanAle: number; pExceedTolerance: number | null; lec: LecPoint[] },
+            };
           })
         );
         const baselineAle = results.find((r) => r.coverage === 0)!.result.meanAle;
@@ -141,7 +146,16 @@ export default function RoiPage() {
           // one. A ratio like "225x" or "$225 per $1" is the way this kind
           // of extreme return is actually presented in security economics.
           const benefitCostRatio = cost > 0 ? riskAvoided / cost : null;
-          return { coverage, meanAle: result.meanAle, pExceedTolerance: result.pExceedTolerance, cost, riskAvoided, netBenefit, benefitCostRatio };
+          return {
+            coverage,
+            meanAle: result.meanAle,
+            pExceedTolerance: result.pExceedTolerance,
+            cost,
+            riskAvoided,
+            netBenefit,
+            benefitCostRatio,
+            lec: result.lec ?? [],
+          };
         });
         setCurve(points);
       } catch (err) {
@@ -172,6 +186,13 @@ export default function RoiPage() {
   const ceilingExceedance = fullCoveragePoint?.pExceedTolerance ?? null;
   const toleranceUnreachable =
     toleranceSet && ceilingExceedance !== null && ceilingExceedance > TARGET_EXCEED_PROBABILITY;
+  // If controls can't get there, the actionable answer isn't "spend more" —
+  // it's the tolerance that WOULD be green at full coverage. Without this the
+  // red banner is a dead end.
+  const requiredTolerance = useMemo(
+    () => (fullCoveragePoint ? toleranceForTargetProbability(fullCoveragePoint.lec, TARGET_EXCEED_PROBABILITY) : null),
+    [fullCoveragePoint]
+  );
   const pctLabel = (p: number | null) => (p === null ? "—" : `${(p * 100).toFixed(2)}%`);
   const withinTolerance = (p: number | null) => p !== null && p <= TARGET_EXCEED_PROBABILITY;
 
@@ -410,6 +431,19 @@ export default function RoiPage() {
                   ceilingExceedance
                 )} of the time — inside the ${(TARGET_EXCEED_PROBABILITY * 100).toFixed(0)}% bar.`}
           </span>
+          {toleranceUnreachable && requiredTolerance !== null && (
+            <div className="mt-3 pt-3 border-t border-white/10 text-slate-300">
+              <span className="text-slate-400">Tolerance that would be green at 100% coverage: </span>
+              <span className="font-mono font-semibold text-slate-100">{currencyFull(requiredTolerance)}/year</span>
+              <button
+                type="button"
+                onClick={() => setRiskTolerance(String(Math.ceil(requiredTolerance)))}
+                className="ml-3 text-xs px-2.5 py-1 rounded-lg border border-white/15 text-slate-200 hover:bg-white/10"
+              >
+                Use this
+              </button>
+            </div>
+          )}
         </div>
       )}
 

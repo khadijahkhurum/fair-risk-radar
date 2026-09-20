@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChartConfiguration } from "chart.js";
 import { ChartCanvas } from "./ChartCanvas";
 import { MultiSelectDropdown } from "./MultiSelectDropdown";
+import { interpolateLec, toleranceForTargetProbability } from "@/lib/lec";
 
 interface Scenario {
   id: string;
@@ -112,52 +113,6 @@ const TOLERANCE_BAND_BORDER: Record<ToleranceBand, string> = {
 
 const GRID_COLOR = "rgba(148, 163, 184, 0.08)";
 const TICK_COLOR = "rgba(148, 163, 184, 0.65)";
-
-// Linear interpolation within an already-computed Loss Exceedance Curve, so
-// dragging the risk-tolerance slider updates the displayed probability
-// instantly without re-running the 8,000-trial simulation.
-function interpolateLec(lec: LecPoint[], x: number): number | null {
-  if (lec.length === 0) return null;
-  if (x <= lec[0].loss) return lec[0].probability;
-  const last = lec[lec.length - 1];
-  if (x >= last.loss) return last.probability;
-  for (let i = 0; i < lec.length - 1; i++) {
-    const a = lec[i];
-    const b = lec[i + 1];
-    if (x >= a.loss && x <= b.loss) {
-      const t = (x - a.loss) / (b.loss - a.loss);
-      return a.probability + t * (b.probability - a.probability);
-    }
-  }
-  return null;
-}
-
-// Inverse of interpolateLec: the lowest loss threshold at which exceedance
-// probability drops to (or below) the target — i.e. "what tolerance would
-// already be green here." Returns null if even the largest simulated loss
-// still exceeds the target (would need a materially different risk posture,
-// not just a bigger tolerance number).
-function toleranceForTargetProbability(lec: LecPoint[], target: number): number | null {
-  if (lec.length === 0) return null;
-  if (lec[0].probability <= target) return lec[0].loss;
-  // Interpolate between the bracketing grid points — the exact inverse of
-  // interpolateLec above. Returning a raw grid point's loss (as this used
-  // to) overstated the tolerance needed by up to half a grid step, and
-  // disagreed with the live (interpolated) P(loss > tolerance) reading by
-  // the same amount — the two numbers must share one interpolation method
-  // or "required tolerance to go green" and "is it green yet" can and did
-  // contradict each other right at the boundary.
-  for (let i = 0; i < lec.length - 1; i++) {
-    const a = lec[i];
-    const b = lec[i + 1];
-    if (a.probability >= target && b.probability <= target) {
-      if (a.probability === b.probability) return a.loss;
-      const t = (a.probability - target) / (a.probability - b.probability);
-      return a.loss + t * (b.loss - a.loss);
-    }
-  }
-  return null;
-}
 
 export function Dashboard() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);

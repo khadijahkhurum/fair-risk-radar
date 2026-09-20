@@ -4,37 +4,52 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer components {
-  /* Inputs read as recessed fields, not outlined boxes. */
-  .select {
-    @apply w-full bg-surface2/80 border border-border rounded-lg px-3 py-2 text-sm text-slate-100
-           focus:outline-none focus:border-accent/70 focus:ring-4 focus:ring-accent/20 transition-all;
-  }
-  /* Solid, slightly tactile primary action — pressed state instead of a hover glow. */
-  .btn-primary {
-    @apply px-4 py-2 rounded-lg bg-accent text-white font-medium text-sm
-           hover:bg-accent/90 active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100
-           shadow-card transition-all;
-  }
-  /* Standard elevated panel. */
-  .card {
-    @apply rounded-2xl border border-border bg-surface shadow-card;
-  }
+/* ───────────────────────────────────────────────────────────────────────────
+   Liquid Glass design system.
+
+   Everything below rides on class names the components ALREADY use
+   (.bg-surface, .bg-surface2, .border-border), so the whole app restyles
+   without editing a single component. Plain CSS after @tailwind utilities
+   wins on source order in Tailwind 3.
+   ─────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Apple's standard smooth curve — everything animates on this one easing,
+     which is most of what makes motion feel "designed" rather than default. */
+  --ease-apple: cubic-bezier(0.32, 0.72, 0, 1);
+  --glass-tint: rgba(255, 255, 255, 0.055);
+  --glass-edge: rgba(255, 255, 255, 0.14);
+  --glass-blur: saturate(180%) blur(32px);
 }
 
 html {
   color-scheme: dark;
+  scroll-behavior: smooth;
 }
 
 body {
   background-color: #000000;
   color: #f5f5f7;
-  /* The single biggest contributor to "looks like a Mac app" — without this,
-     Inter renders heavy and muddy on dark backgrounds. */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.011em;
   font-feature-settings: "cv11", "ss01";
+  position: relative;
+  min-height: 100vh;
+}
+
+/* Ambient depth: two huge, soft colour fields behind the glass. Without
+   something to refract, "glass" just reads as grey. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(60rem 40rem at 12% -10%, rgba(10, 132, 255, 0.16), transparent 60%),
+    radial-gradient(50rem 36rem at 88% 8%, rgba(100, 210, 255, 0.10), transparent 62%),
+    radial-gradient(44rem 34rem at 60% 100%, rgba(191, 90, 242, 0.09), transparent 60%);
+  pointer-events: none;
 }
 
 h1,
@@ -47,26 +62,156 @@ h3 {
   background-color: rgba(10, 132, 255, 0.35);
 }
 
-/* Overlay scrollbars, Apple-style: invisible until the pointer is over them. */
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
-  border: 3px solid transparent;
-  background-clip: content-box;
-}
-::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(255, 255, 255, 0.26);
-}
-::-webkit-scrollbar-track {
-  background-color: transparent;
+/* ── The glass material ─────────────────────────────────────────────────── */
+
+.bg-surface,
+.bg-surface2 {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  /* Specular top edge + soft ambient drop. This inset highlight is the single
+     detail that separates "translucent panel" from Apple's glass. */
+  box-shadow:
+    inset 0 1px 0 0 var(--glass-edge),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.30),
+    0 8px 32px -12px rgba(0, 0, 0, 0.85);
+  transition: background-color 0.4s var(--ease-apple), box-shadow 0.4s var(--ease-apple),
+    transform 0.4s var(--ease-apple);
 }
 
-/* Strip the spinner from number inputs — it's the loudest "unstyled web form"
-   tell in the whole UI. */
+.bg-surface {
+  background-color: var(--glass-tint) !important;
+}
+.bg-surface2 {
+  background-color: rgba(255, 255, 255, 0.085) !important;
+}
+
+/* Hairline separators, not drawn boxes. */
+.border-border {
+  border-color: rgba(255, 255, 255, 0.11) !important;
+}
+
+/* Panels lift slightly under the pointer — Apple's cards respond, they don't
+   just sit there. Inputs and table cells are excluded so they stay put. */
+.bg-surface:not(input):not(td):not(th):hover {
+  background-color: rgba(255, 255, 255, 0.075) !important;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.20),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.30),
+    0 16px 48px -16px rgba(0, 0, 0, 0.95);
+}
+
+/* Sticky table columns must stay OPAQUE — a frosted sticky cell lets the
+   horizontally-scrolled content underneath show straight through it. */
+th.bg-surface,
+td.bg-surface {
+  background-color: #17171a !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+/* Status callouts (green/red/accent tinted panels) are glass too — otherwise
+   they sit flat against the blurred cards around them and break the material. */
+.bg-accent\/5,
+.bg-accent\/10,
+.bg-emerald-500\/5,
+.bg-emerald-500\/10,
+.bg-risk\/5,
+.bg-risk\/10 {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.12),
+    0 8px 32px -14px rgba(0, 0, 0, 0.8);
+  transition: box-shadow 0.4s var(--ease-apple), background-color 0.4s var(--ease-apple);
+}
+
+/* ── Entrance choreography ──────────────────────────────────────────────── */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Every top-level block on every page fades up in sequence on load. Applied
+   via a child selector so no page needs a wrapper or a class. */
+main > * {
+  animation: rise 0.7s var(--ease-apple) both;
+}
+main > *:nth-child(1) { animation-delay: 0.02s; }
+main > *:nth-child(2) { animation-delay: 0.08s; }
+main > *:nth-child(3) { animation-delay: 0.14s; }
+main > *:nth-child(4) { animation-delay: 0.20s; }
+main > *:nth-child(5) { animation-delay: 0.26s; }
+main > *:nth-child(n + 6) { animation-delay: 0.32s; }
+
+@media (prefers-reduced-motion: reduce) {
+  main > * {
+    animation: none;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* ── Controls ───────────────────────────────────────────────────────────── */
+
+@layer components {
+  .select {
+    @apply w-full border border-border rounded-lg px-3 py-2 text-sm text-slate-100
+           focus:outline-none focus:border-accent/70 focus:ring-4 focus:ring-accent/25;
+    background-color: rgba(255, 255, 255, 0.07);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.10);
+    transition: all 0.3s var(--ease-apple);
+  }
+  .select:hover {
+    background-color: rgba(255, 255, 255, 0.10);
+  }
+  /* Glass button: tinted accent with a lit edge, and a real press response. */
+  .btn-primary {
+    @apply px-4 py-2 rounded-lg text-white font-medium text-sm disabled:opacity-40;
+    background-color: rgba(10, 132, 255, 0.85);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    box-shadow:
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.28),
+      0 4px 16px -4px rgba(10, 132, 255, 0.55);
+    transition: all 0.3s var(--ease-apple);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: rgba(10, 132, 255, 1);
+    transform: translateY(-1px);
+    box-shadow:
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.35),
+      0 8px 24px -6px rgba(10, 132, 255, 0.75);
+  }
+  .btn-primary:active:not(:disabled) {
+    transform: scale(0.97);
+    transition-duration: 0.1s;
+  }
+  .card {
+    @apply rounded-2xl border border-border bg-surface;
+  }
+}
+
+/* Buttons and links everywhere pick up the same easing. */
+button,
+a {
+  transition: color 0.25s var(--ease-apple), background-color 0.25s var(--ease-apple),
+    border-color 0.25s var(--ease-apple), opacity 0.25s var(--ease-apple),
+    transform 0.25s var(--ease-apple);
+}
+
+/* ── Native-feeling form controls ───────────────────────────────────────── */
+
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button {
   -webkit-appearance: none;
@@ -76,13 +221,13 @@ input[type="number"] {
   -moz-appearance: textfield;
 }
 
-/* Range inputs: continuous track + a real thumb, matching a macOS slider. */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
-  height: 4px;
+  height: 5px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
   outline: none;
 }
 input[type="range"]::-webkit-slider-thumb {
@@ -91,14 +236,17 @@ input[type="range"]::-webkit-slider-thumb {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  background: linear-gradient(180deg, #ffffff, #e8e8ed);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.9);
   cursor: grab;
-  transition: transform 0.12s ease;
+  transition: transform 0.2s var(--ease-apple);
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.12);
 }
 input[type="range"]::-webkit-slider-thumb:active {
   cursor: grabbing;
-  transform: scale(1.12);
+  transform: scale(1.22);
 }
 input[type="range"]::-moz-range-thumb {
   width: 18px;
@@ -106,6 +254,23 @@ input[type="range"]::-moz-range-thumb {
   border: none;
   border-radius: 50%;
   background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
   cursor: grab;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.28);
+}
+::-webkit-scrollbar-track {
+  background-color: transparent;
 }
