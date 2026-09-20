@@ -61,7 +61,10 @@ export default function RoiPage() {
         setScenarios(data.scenarios);
         setThreats(data.threats);
         setScenarioId(data.scenarios[0]?.id ?? "");
-        setThreatIds(data.threats.map((t: Threat) => t.id));
+        // Baseline (no extra threats) by default — matches the dashboard's
+        // own default. Stacking every threat community here inflates ALE
+        // to the point where no realistic control budget looks meaningful
+        // against it, which is what made this page look unresponsive.
       })
       .catch(() => setLoadError("Failed to load scenarios"));
   }, []);
