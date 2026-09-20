@@ -26,6 +26,9 @@ interface Threat {
   id: string;
   name: string;
 }
+interface ControlRow {
+  coveragePct: number;
+}
 interface CurvePoint {
   coverage: number;
   meanAle: number;
@@ -53,6 +56,10 @@ export default function RoiPage() {
   const [curve, setCurve] = useState<CurvePoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Real current control coverage (same average shown on Control Posture),
+  // not just a hypothetical sweep — this is what anchors the curve to where
+  // the organization actually stands today instead of pure theory.
+  const [currentCoveragePct, setCurrentCoveragePct] = useState<number | null>(null);
 
   useEffect(() => {
     fetch("/api/scenarios")
@@ -65,9 +72,23 @@ export default function RoiPage() {
         // own default. Stacking every threat community here inflates ALE
         // to the point where no realistic control budget looks meaningful
         // against it, which is what made this page look unresponsive.
+        const controls = (data.controls ?? []) as ControlRow[];
+        if (controls.length > 0) {
+          const avg = controls.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / controls.length;
+          setCurrentCoveragePct(Math.round(avg));
+        }
       })
       .catch(() => setLoadError("Failed to load scenarios"));
   }, []);
+
+  // The sweep always includes 0/10/…/100, plus today's actual coverage so
+  // it's a real simulated point on the curve, not an eyeballed interpolation
+  // between two grid lines.
+  const coverageSteps = useMemo(() => {
+    const steps = new Set(COVERAGE_STEPS);
+    if (currentCoveragePct !== null) steps.add(currentCoveragePct);
+    return Array.from(steps).sort((a, b) => a - b);
+  }, [currentCoveragePct]);
 
   // Re-run the coverage sweep whenever the inputs that affect it change.
   // Debounced the same way the dashboard's what-if panel is — this fires on
@@ -81,7 +102,7 @@ export default function RoiPage() {
       const cost100 = costAt100 ? Number(costAt100) : 0;
       try {
         const results = await Promise.all(
-          COVERAGE_STEPS.map(async (coverage) => {
+          coverageSteps.map(async (coverage) => {
             const res = await fetch("/api/risk/whatif", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -92,7 +113,7 @@ export default function RoiPage() {
             return { coverage, result: data.result as { meanAle: number; pExceedTolerance: number | null } };
           })
         );
-        const baselineAle = results[0].result.meanAle; // coverage = 0
+        const baselineAle = results.find((r) => r.coverage === 0)!.result.meanAle;
         const points: CurvePoint[] = results.map(({ coverage, result }) => {
           // Cost scales with the SQUARE of coverage, not linearly: the first
           // half of coverage is the cheap, high-leverage fixes (MFA, patch
@@ -115,15 +136,25 @@ export default function RoiPage() {
       }
     }, 400);
     return () => clearTimeout(handle);
-  }, [scenarioId, threatIds, riskTolerance, costAt100]);
+  }, [scenarioId, threatIds, riskTolerance, costAt100, coverageSteps]);
 
   const optimalPoint = useMemo(() => {
     if (curve.length === 0) return null;
     return curve.reduce((best, p) => (p.netBenefit > best.netBenefit ? p : best), curve[0]);
   }, [curve]);
 
+  const currentPoint = useMemo(() => {
+    if (currentCoveragePct === null) return null;
+    return curve.find((p) => p.coverage === currentCoveragePct) ?? null;
+  }, [curve, currentCoveragePct]);
+
   const lossVsCostConfig: ChartConfiguration<"line"> | null = useMemo(() => {
     if (curve.length === 0) return null;
+    // Highlight whichever point is today's real coverage — bigger, amber —
+    // so the curve reads against reality, not just as an abstract sweep.
+    const pointStyle = (color: string) =>
+      curve.map((p) => (p.coverage === currentCoveragePct ? "#f59e0b" : color));
+    const pointSize = curve.map((p) => (p.coverage === currentCoveragePct ? 6 : 3));
     return {
       type: "line",
       data: {
@@ -134,6 +165,8 @@ export default function RoiPage() {
             data: curve.map((p) => p.meanAle),
             borderColor: "#f43f5e",
             backgroundColor: "#f43f5e22",
+            pointBackgroundColor: pointStyle("#f43f5e"),
+            pointRadius: pointSize,
             tension: 0.25,
             fill: false,
           },
@@ -142,6 +175,8 @@ export default function RoiPage() {
             data: curve.map((p) => p.cost),
             borderColor: "#0891b2",
             backgroundColor: "#0891b222",
+            pointBackgroundColor: pointStyle("#0891b2"),
+            pointRadius: pointSize,
             tension: 0.25,
             fill: false,
             borderDash: [5, 4],
@@ -161,7 +196,7 @@ export default function RoiPage() {
         plugins: { legend: { labels: { color: "#cbd5e1" } } },
       },
     };
-  }, [curve]);
+  }, [curve, currentCoveragePct]);
 
   const netBenefitConfig: ChartConfiguration<"bar"> | null = useMemo(() => {
     if (curve.length === 0) return null;
@@ -173,9 +208,11 @@ export default function RoiPage() {
           {
             label: "Net benefit (risk avoided − cost)",
             data: curve.map((p) => p.netBenefit),
-            backgroundColor: curve.map((p) =>
-              optimalPoint && p.coverage === optimalPoint.coverage ? "#10b981" : p.netBenefit >= 0 ? "#3454d1" : "#f43f5e"
-            ),
+            backgroundColor: curve.map((p) => {
+              if (optimalPoint && p.coverage === optimalPoint.coverage) return "#10b981"; // optimal wins ties
+              if (p.coverage === currentCoveragePct) return "#f59e0b"; // today
+              return p.netBenefit >= 0 ? "#3454d1" : "#f43f5e";
+            }),
           },
         ],
       },
@@ -257,6 +294,21 @@ export default function RoiPage() {
         </p>
       </div>
 
+      {currentPoint && costAt100 && (
+        <div className="rounded-xl border border-accent/40 bg-accent/5 p-5 mb-6">
+          <div className="text-xs font-medium text-slate-400 mb-1">Where you stand today (actual coverage)</div>
+          <div className="text-xl font-mono font-semibold text-slate-100">{currentPoint.coverage}% control coverage</div>
+          <p className="text-sm text-slate-400 mt-2">
+            At today&apos;s real coverage, net benefit is {currencyFull(currentPoint.netBenefit)}/year.{" "}
+            {optimalPoint && optimalPoint.coverage !== currentPoint.coverage
+              ? `Closing the gap to the ${optimalPoint.coverage}% optimum would add another ${currencyFull(
+                  optimalPoint.netBenefit - currentPoint.netBenefit
+                )}/year in net benefit.`
+              : `That's already the model's optimum for this cost estimate.`}
+          </p>
+        </div>
+      )}
+
       {optimalPoint && costAt100 && (
         <div
           className={`rounded-xl border p-5 mb-6 ${
@@ -284,14 +336,19 @@ export default function RoiPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="rounded-xl border border-border bg-surface p-5">
           <h3 className="font-semibold text-slate-100 mb-1">Loss vs. cost, by coverage level</h3>
-          <p className="text-xs text-slate-500 mb-3">Where the two lines cross is where further spend stops being worth it.</p>
+          <p className="text-xs text-slate-500 mb-3">
+            Where the two lines cross is where further spend stops being worth it. The amber point marks today&apos;s
+            actual coverage.
+          </p>
           <div className="h-72">
             {lossVsCostConfig ? <ChartCanvas config={lossVsCostConfig} /> : <p className="text-sm text-slate-500">{loading ? "Simulating…" : "Pick a scenario to begin."}</p>}
           </div>
         </div>
         <div className="rounded-xl border border-border bg-surface p-5">
           <h3 className="font-semibold text-slate-100 mb-1">Net benefit by coverage level</h3>
-          <p className="text-xs text-slate-500 mb-3">Green bar marks the coverage level with the highest net benefit.</p>
+          <p className="text-xs text-slate-500 mb-3">
+            Green bar is the optimum; amber is today&apos;s actual coverage (if different).
+          </p>
           <div className="h-72">
             {netBenefitConfig ? <ChartCanvas config={netBenefitConfig} /> : <p className="text-sm text-slate-500">{loading ? "Simulating…" : "Pick a scenario to begin."}</p>}
           </div>
