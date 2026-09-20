@@ -1,42 +1,38 @@
+// PATCH /api/controls — manual control-coverage override.
+// Body: { controlId: string, coveragePct: number }
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-/**
- * PATCH /api/controls  { scenario: "healthcare", control: "mfa", coveragePct: 72 }
- * Manual override for one control's coverage. Marks the row's source as
- * "manual" — if it was previously synced from AWS Config, this intentionally
- * overwrites that until the next sync.
- */
 export async function PATCH(req: NextRequest) {
-  const body = await req.json().catch(() => ({}));
-  const { scenario: scenarioKey, control: controlKey, coveragePct } = body as {
-    scenario?: string;
-    control?: string;
-    coveragePct?: number;
-  };
-
-  if (!scenarioKey || !controlKey || typeof coveragePct !== "number") {
-    return NextResponse.json(
-      { error: "scenario, control, and numeric coveragePct are required" },
-      { status: 400 }
-    );
-  }
-  if (coveragePct < 0 || coveragePct > 100) {
-    return NextResponse.json({ error: "coveragePct must be between 0 and 100" }, { status: 400 });
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
   }
 
-  const [scenario, control] = await Promise.all([
-    prisma.scenario.findUnique({ where: { key: scenarioKey } }),
-    prisma.control.findUnique({ where: { key: controlKey } }),
-  ]);
-  if (!scenario) return NextResponse.json({ error: `unknown scenario "${scenarioKey}"` }, { status: 404 });
-  if (!control) return NextResponse.json({ error: `unknown control "${controlKey}"` }, { status: 404 });
+  const { controlId, coveragePct } = (body ?? {}) as { controlId?: string; coveragePct?: number };
 
-  const updated = await prisma.controlCoverage.upsert({
-    where: { scenarioId_controlId: { scenarioId: scenario.id, controlId: control.id } },
-    update: { coveragePct, source: "manual" },
-    create: { scenarioId: scenario.id, controlId: control.id, coveragePct, source: "manual" },
-  });
+  if (!controlId || typeof controlId !== "string") {
+    return NextResponse.json({ error: "controlId is required" }, { status: 400 });
+  }
+  if (typeof coveragePct !== "number" || Number.isNaN(coveragePct) || coveragePct < 0 || coveragePct > 100) {
+    return NextResponse.json({ error: "coveragePct must be a number between 0 and 100" }, { status: 400 });
+  }
 
-  return NextResponse.json(updated);
+  try {
+    const control = await prisma.control.findUnique({ where: { id: controlId } });
+    if (!control) {
+      return NextResponse.json({ error: `Unknown controlId "${controlId}"` }, { status: 404 });
+    }
+
+    const coverage = await prisma.controlCoverage.create({
+      data: { controlId, coveragePct, source: "MANUAL" },
+    });
+
+    return NextResponse.json({ coverage });
+  } catch (err) {
+    console.error("PATCH /api/controls failed:", err);
+    return NextResponse.json({ error: "Failed to update control coverage" }, { status: 500 });
+  }
 }

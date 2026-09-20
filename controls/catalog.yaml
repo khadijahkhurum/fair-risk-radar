@@ -1,43 +1,112 @@
-# Compliance-as-code control catalog.
+# Compliance-as-code control catalog — single source of truth.
+# prisma/seed.ts reads this file and upserts the Control table from it.
+# Change a mapping here, re-run `npm run db:seed`, and it propagates through
+# the API, the framework selector, the dashboard, and the exported reports.
 #
-# This file is the single source of truth for the three controls the FAIR model
-# tracks. `prisma/seed.ts` reads it and upserts each entry into the `Control`
-# table, so the database is always a mirror of what's checked in here — change
-# a mapping in a PR, re-run `npm run db:seed`, done. `weight` is the control's
-# influence on the FAIR Vulnerability factor; weights across the file sum to 1.
+# euAiAct / owaspLlm are left "N/A" where a generic IT/security control has
+# no genuine hook into an AI-specific framework — a forced mapping would be
+# worse than an honest gap.
 
-- key: mfa
-  name: MFA & Identity
-  description: >
-    Share of privileged and workforce identities behind phishing-resistant
-    multi-factor authentication.
-  weight: 0.35
-  frameworkMappings:
-    NIST CSF 2.0: "PR.AA-03, PR.AA-05"
-    ISO 27001:2022: "A.5.17, A.8.5"
-    SOC 2: "CC6.1, CC6.6"
-    PCI DSS v4.0: "8.4.2, 8.5.1"
+- id: mfa-enforcement
+  name: Multi-Factor Authentication Enforcement
+  description: All privileged and standard user accounts require MFA at login.
+  category: Identity & Access Management
+  mappings:
+    nist_csf: PR.AA-03
+    iso27001: A.8.5
+    soc2: CC6.1
+    pci_dss: 8.4.2
+    eu_ai_act: "N/A"
+    owasp_llm: "N/A"
+  awsConfigRule: iam-user-mfa-enabled
 
-- key: patch
-  name: Patch Cadence
-  description: >
-    Share of critical vulnerabilities remediated inside the organization's
-    agreed remediation window.
-  weight: 0.40
-  frameworkMappings:
-    NIST CSF 2.0: "ID.RA-01, PR.PS-02"
-    ISO 27001:2022: "A.8.8, A.8.32"
-    SOC 2: "CC7.1, CC8.1"
-    PCI DSS v4.0: "6.3.3, 11.3.1"
+- id: patch-management
+  name: Endpoint Patch Management
+  description: Managed instances are patched against known vulnerabilities within SLA.
+  category: Vulnerability Management
+  mappings:
+    nist_csf: ID.RA-01
+    iso27001: A.8.8
+    soc2: CC7.1
+    pci_dss: 6.3.3
+    eu_ai_act: "N/A"
+    owasp_llm: "LLM05: Supply Chain Vulnerabilities"
+  awsConfigRule: ec2-managedinstance-patch-compliance-status
 
-- key: kms
-  name: Cloud KMS
-  description: >
-    Share of regulated data stores encrypted under customer-managed keys
-    with scheduled rotation.
-  weight: 0.25
-  frameworkMappings:
-    NIST CSF 2.0: "PR.DS-01, PR.DS-02"
-    ISO 27001:2022: "A.8.24, A.5.33"
-    SOC 2: "CC6.7"
-    PCI DSS v4.0: "3.5.1, 3.6.1"
+- id: key-rotation
+  name: Encryption Key Rotation
+  description: Customer-managed KMS keys are rotated on a scheduled basis.
+  category: Cryptography
+  mappings:
+    nist_csf: PR.DS-01
+    iso27001: A.8.24
+    soc2: CC6.7
+    pci_dss: 3.6.4
+    eu_ai_act: "N/A"
+    owasp_llm: "N/A"
+  awsConfigRule: cmk-backing-key-rotation-enabled
+
+- id: access-review
+  name: Periodic Access Review
+  description: User access rights are reviewed and recertified on a recurring cadence.
+  category: Identity & Access Management
+  mappings:
+    nist_csf: PR.AA-05
+    iso27001: A.5.18
+    soc2: CC6.2
+    pci_dss: "7.2.4"
+    eu_ai_act: "Art. 14 (Human Oversight)"
+    owasp_llm: "LLM08: Excessive Agency"
+  awsConfigRule: null
+
+- id: logging-monitoring
+  name: Centralized Logging & Monitoring
+  description: Security-relevant events are logged centrally and retained for investigation.
+  category: Detection
+  mappings:
+    nist_csf: DE.CM-01
+    iso27001: A.8.15
+    soc2: CC7.2
+    pci_dss: "10.2"
+    eu_ai_act: "Art. 12 (Record-Keeping)"
+    owasp_llm: "LLM06: Sensitive Information Disclosure"
+  awsConfigRule: null
+
+- id: vendor-risk-assessment
+  name: Third-Party / Vendor Risk Assessment
+  description: Vendors with access to sensitive data undergo a documented risk assessment before onboarding.
+  category: Third-Party Risk
+  mappings:
+    nist_csf: GV.SC-06
+    iso27001: A.5.19
+    soc2: CC9.2
+    pci_dss: "12.8.1"
+    eu_ai_act: "Art. 28 (Value Chain Obligations)"
+    owasp_llm: "LLM05: Supply Chain Vulnerabilities"
+  awsConfigRule: null
+
+- id: incident-response-plan
+  name: Incident Response Plan
+  description: A documented, tested incident response plan exists and is exercised annually.
+  category: Response & Recovery
+  mappings:
+    nist_csf: RS.MA-01
+    iso27001: A.5.24
+    soc2: CC7.4
+    pci_dss: "12.10.1"
+    eu_ai_act: "Art. 73 (Serious Incident Reporting)"
+    owasp_llm: "LLM04: Model Denial of Service"
+  awsConfigRule: null
+
+- id: data-encryption-at-rest
+  name: Data Encryption at Rest
+  description: Sensitive data stores are encrypted at rest using an approved cipher.
+  category: Cryptography
+  mappings:
+    nist_csf: PR.DS-01
+    iso27001: A.8.24
+    soc2: CC6.7
+    pci_dss: "3.5.1"
+    eu_ai_act: "N/A"
+    owasp_llm: "LLM06: Sensitive Information Disclosure"
+  awsConfigRule: null

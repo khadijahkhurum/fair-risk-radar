@@ -1,15 +1,9 @@
+// Standard Next.js singleton so hot-reload in dev doesn't open a new
+// PrismaClient (and a new DB connection pool) on every file save.
 import { PrismaClient } from "@prisma/client";
 
-// Standard Next.js pattern: reuse one PrismaClient across hot reloads in dev
-// so each edit doesn't open a fresh pool of DB connections.
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
-  });
+export const prisma = globalForPrisma.prisma ?? new PrismaClient();
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
-}
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;

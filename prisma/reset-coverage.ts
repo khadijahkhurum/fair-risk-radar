@@ -1,29 +1,35 @@
-/**
- * Resets every scenario's control coverage back to the manual baseline.
- *
- * Useful after experimenting with the AWS Config sync in demo mode, which
- * relabels coverage rows as "demo". Run with: npm run db:reset-coverage
- */
+// Resets every control back to its demo starting coverage — useful after
+// testing manual overrides or an AWS Config sync against a scratch account.
+//
+// Run directly via tsx, not the `prisma` CLI, so .env needs loading explicitly.
+import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import { DEMO_COVERAGE } from "../src/lib/aws-config";
 
 const prisma = new PrismaClient();
 
-async function main() {
-  const coverage = await prisma.controlCoverage.findMany({ include: { control: true } });
+const DEMO_STARTING_COVERAGE: Record<string, number> = {
+  "mfa-enforcement": 87,
+  "patch-management": 74,
+  "key-rotation": 95,
+  "access-review": 62,
+  "logging-monitoring": 81,
+  "vendor-risk-assessment": 55,
+  "incident-response-plan": 70,
+  "data-encryption-at-rest": 90,
+};
 
-  for (const row of coverage) {
-    const key = row.control.key as keyof typeof DEMO_COVERAGE;
-    await prisma.controlCoverage.update({
-      where: { id: row.id },
+async function main() {
+  const controls = await prisma.control.findMany();
+  for (const control of controls) {
+    await prisma.controlCoverage.create({
       data: {
-        coveragePct: DEMO_COVERAGE[key] ?? row.coveragePct,
-        source: "manual",
+        controlId: control.id,
+        coveragePct: DEMO_STARTING_COVERAGE[control.id] ?? 75,
+        source: "DEMO",
       },
     });
   }
-
-  console.log(`Reset ${coverage.length} control coverage rows to manual baseline.`);
+  console.log(`Reset coverage for ${controls.length} controls.`);
 }
 
 main()

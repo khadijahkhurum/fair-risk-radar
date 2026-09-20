@@ -1,117 +1,71 @@
-import type { FairProfile, Triangular } from "./fair";
-
-/**
- * Industry loss profiles.
- *
- * lossPrimary/lossSecondary are SOURCED: calibrated to IBM's 2025 Cost of a
- * Data Breach Report industry averages (Figure 3), split into primary vs.
- * secondary using the report's own global cost-category breakdown.
- *
- * tef, vulnBaseline, secProb are MODELED: not published at this granularity
- * anywhere, so they're explicit assumptions meant to be recalibrated against
- * your own telemetry (see README § Methodology). The min/max spread around
- * each sourced loss figure is also modeled, since IBM publishes the mean only.
- *
- * Calibration note on vulnBaseline — the probability that a significant threat
- * event becomes a material loss event, before controls. An earlier draft used
- * ~27%, which at 14 threat events/year implies roughly four material breaches
- * annually for a mid-size bank: not survivable, and not what the incident
- * record shows. These values sit at 4.6–6.8%, which puts untreated expected
- * annual loss a little above one industry-average breach per year and leaves
- * the board tolerance reachable at 60–75% weighted control coverage. Regulated
- * sectors carry the lower baselines (more mature controls, more attacker
- * effort per success); retail and public sector carry the higher ones.
- */
-
-const GLOBAL_TOTAL = 4_440_000;
-const GLOBAL_SECONDARY = 1_380_000 + 1_200_000 + 390_000; // lost business + post-breach response + notification
-const SECONDARY_FRACTION = GLOBAL_SECONDARY / GLOBAL_TOTAL; // ~0.67
-const PRIMARY_FRACTION = 1 - SECONDARY_FRACTION; // ~0.33
-
-function scale(mode: number, low: number, high: number): Triangular {
-  return { min: mode * low, mode, max: mode * high };
+// Industry loss-profile scenarios for the FAIR model.
+//
+// Loss magnitude (lossMin/lossMode/lossMax) is calibrated to IBM Security's
+// *Cost of a Data Breach Report 2025* per-industry average total cost.
+// Threat Event Frequency (tefLambda) and Vulnerability are NOT published at
+// this granularity anywhere — they are explicit modeling assumptions, tuned
+// to be directionally reasonable, not measured. Both are labeled as such in
+// the dashboard's methodology panel (see `sourced` field on each factor
+// returned by the API — src/app/api/risk/route.ts).
+export interface Scenario {
+  id: string;
+  name: string;
+  industry: string;
+  tefLambda: number; // modeled: mean threat events per year (Poisson)
+  vulnerability: number; // modeled: P(threat event becomes a loss event)
+  lossMin: number; // sourced: IBM 2025, low end of industry range
+  lossMode: number; // sourced: IBM 2025, industry average total cost
+  lossMax: number; // sourced: IBM 2025, high end of industry range
+  sourceNote: string;
 }
 
-function splitLoss(industryAverage: number) {
-  return {
-    lossPrimary: scale(industryAverage * PRIMARY_FRACTION, 0.4, 2.4),
-    lossSecondary: scale(industryAverage * SECONDARY_FRACTION, 0.4, 2.4),
-  };
-}
-
-export interface ScenarioDefinition {
-  key: string;
-  label: string;
-  threat: string;
-  sourceCitation: string;
-  toleranceUsd: number;
-  profile: FairProfile;
-}
-
-export const SCENARIO_DEFINITIONS: ScenarioDefinition[] = [
+export const scenarios: Scenario[] = [
   {
-    key: "healthcare",
-    label: "Healthcare — $7.42M avg breach cost",
-    threat: "Encrypt-and-extort against clinical and patient-record systems",
-    sourceCitation: "IBM Cost of a Data Breach Report 2025, Figure 3",
-    toleranceUsd: 3_500_000,
-    profile: {
-      tef: { min: 6, mode: 15, max: 32 },
-      vulnBaseline: { min: 0.013, mode: 0.046, max: 0.12 },
-      secProb: { min: 0.55, mode: 0.8, max: 0.95 },
-      ...splitLoss(7_420_000),
-    },
+    id: "financial-services",
+    name: "Financial Services",
+    industry: "Financial Services",
+    tefLambda: 12,
+    vulnerability: 0.22,
+    lossMin: 3_900_000,
+    lossMode: 5_900_000,
+    lossMax: 8_200_000,
+    sourceNote:
+      "Loss magnitude: IBM Cost of a Data Breach Report 2025, Financial sector average. TEF and vulnerability are modeling assumptions.",
   },
   {
-    key: "financial",
-    label: "Financial services — $5.56M avg breach cost",
-    threat: "Third-party processor compromise exposing account data",
-    sourceCitation: "IBM Cost of a Data Breach Report 2025, Figure 3",
-    toleranceUsd: 2_800_000,
-    profile: {
-      tef: { min: 6, mode: 14, max: 30 },
-      vulnBaseline: { min: 0.015, mode: 0.052, max: 0.13 },
-      secProb: { min: 0.55, mode: 0.78, max: 0.95 },
-      ...splitLoss(5_560_000),
-    },
+    id: "healthcare",
+    name: "Healthcare",
+    industry: "Healthcare",
+    tefLambda: 9,
+    vulnerability: 0.28,
+    lossMin: 6_800_000,
+    lossMode: 9_770_000,
+    lossMax: 13_500_000,
+    sourceNote:
+      "Loss magnitude: IBM Cost of a Data Breach Report 2025, Healthcare average (highest of all sectors). TEF and vulnerability are modeling assumptions.",
   },
   {
-    key: "technology",
-    label: "Technology — $4.79M avg breach cost",
-    threat: "Cloud misconfiguration exposing customer data",
-    sourceCitation: "IBM Cost of a Data Breach Report 2025, Figure 3",
-    toleranceUsd: 2_400_000,
-    profile: {
-      tef: { min: 5, mode: 12, max: 26 },
-      vulnBaseline: { min: 0.016, mode: 0.054, max: 0.14 },
-      secProb: { min: 0.5, mode: 0.75, max: 0.93 },
-      ...splitLoss(4_790_000),
-    },
+    id: "technology",
+    name: "Technology / SaaS",
+    industry: "Technology",
+    tefLambda: 15,
+    vulnerability: 0.18,
+    lossMin: 3_200_000,
+    lossMode: 4_880_000,
+    lossMax: 6_900_000,
+    sourceNote:
+      "Loss magnitude: IBM Cost of a Data Breach Report 2025, Technology sector average. TEF and vulnerability are modeling assumptions.",
   },
   {
-    key: "retail",
-    label: "Retail — $3.54M avg breach cost",
-    threat: "Point-of-sale / e-commerce credential compromise",
-    sourceCitation: "IBM Cost of a Data Breach Report 2025, Figure 3",
-    toleranceUsd: 1_800_000,
-    profile: {
-      tef: { min: 4, mode: 10, max: 22 },
-      vulnBaseline: { min: 0.018, mode: 0.064, max: 0.16 },
-      secProb: { min: 0.5, mode: 0.73, max: 0.92 },
-      ...splitLoss(3_540_000),
-    },
-  },
-  {
-    key: "public",
-    label: "Public sector — $2.86M avg breach cost",
-    threat: "Phishing-driven access into constituent-data systems",
-    sourceCitation: "IBM Cost of a Data Breach Report 2025, Figure 3",
-    toleranceUsd: 1_400_000,
-    profile: {
-      tef: { min: 4, mode: 9, max: 20 },
-      vulnBaseline: { min: 0.019, mode: 0.068, max: 0.17 },
-      secProb: { min: 0.45, mode: 0.7, max: 0.9 },
-      ...splitLoss(2_860_000),
-    },
+    id: "retail",
+    name: "Retail / E-commerce",
+    industry: "Retail",
+    tefLambda: 14,
+    vulnerability: 0.2,
+    lossMin: 2_400_000,
+    lossMode: 3_480_000,
+    lossMax: 5_100_000,
+    sourceNote:
+      "Loss magnitude: IBM Cost of a Data Breach Report 2025, Retail sector average. TEF and vulnerability are modeling assumptions.",
   },
 ];

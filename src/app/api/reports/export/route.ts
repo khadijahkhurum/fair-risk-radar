@@ -1,72 +1,67 @@
+// GET /api/reports/export?format=csv|pdf — current control posture + latest
+// risk assessment, as an audit-evidence artifact.
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { buildCsv, buildPdf } from "@/lib/report";
+import { buildCsvExport, buildPdfExport, type ExportRow } from "@/lib/report";
 
-/** GET /api/reports/export?scenario=healthcare&format=csv|pdf */
 export async function GET(req: NextRequest) {
-  const key = req.nextUrl.searchParams.get("scenario");
-  const format = (req.nextUrl.searchParams.get("format") ?? "csv").toLowerCase();
-  if (!key) return NextResponse.json({ error: "scenario query param required" }, { status: 400 });
+  const format = req.nextUrl.searchParams.get("format") ?? "csv";
   if (format !== "csv" && format !== "pdf") {
     return NextResponse.json({ error: 'format must be "csv" or "pdf"' }, { status: 400 });
   }
 
-  const scenario = await prisma.scenario.findUnique({
-    where: { key },
-    include: {
-      coverage: { include: { control: true } },
-      assessments: { orderBy: { createdAt: "desc" }, take: 1 },
-    },
-  });
-  if (!scenario) return NextResponse.json({ error: `unknown scenario "${key}"` }, { status: 404 });
+  try {
+    const controls = await prisma.control.findMany({
+      include: { coverage: { orderBy: { recordedAt: "desc" }, take: 1 } },
+      orderBy: { name: "asc" },
+    });
 
-  const assessment = scenario.assessments[0];
-  if (!assessment) {
-    return NextResponse.json(
-      { error: "No assessment on record yet — run a simulation first (POST /api/risk)." },
-      { status: 409 }
-    );
-  }
+    const rows: ExportRow[] = controls.map((c) => ({
+      controlId: c.id,
+      controlName: c.name,
+      category: c.category,
+      nistCsf: c.nistCsf,
+      iso27001: c.iso27001,
+      soc2: c.soc2,
+      pciDss: c.pciDss,
+      coveragePct: c.coverage[0]?.coveragePct ?? 0,
+      coverageSource: c.coverage[0]?.source ?? "DEMO",
+    }));
 
-  const input = {
-    scenarioLabel: scenario.label,
-    threat: scenario.threat,
-    sourceCitation: scenario.sourceCitation,
-    toleranceUsd: scenario.toleranceUsd,
-    controlCoverage: scenario.coverage.map((c) => ({
-      name: c.control.name,
-      coveragePct: c.coveragePct,
-      source: c.source,
-      mappings: c.control.frameworkMappings as Record<string, string>,
-    })),
-    assessment: {
-      trials: assessment.trials,
-      expectedAnnualLoss: assessment.expectedAnnualLoss,
-      p50: assessment.p50,
-      p95: assessment.p95,
-      p99: assessment.p99,
-      lossEventFrequency: assessment.lossEventFrequency,
-      createdAt: assessment.createdAt.toISOString(),
-    },
-  };
+    const latest = await prisma.riskAssessment.findFirst({
+      orderBy: { createdAt: "desc" },
+      include: { scenario: true },
+    });
+    const assessment = latest
+      ? {
+          scenarioName: latest.scenario.name,
+          meanAle: latest.meanAle,
+          p10Ale: latest.p10Ale,
+          p50Ale: latest.p50Ale,
+          p90Ale: latest.p90Ale,
+          generatedAt: latest.createdAt,
+        }
+      : null;
 
-  const filenameBase = `fair-risk-radar-${key}-${assessment.createdAt.toISOString().slice(0, 10)}`;
+    if (format === "csv") {
+      const csv = buildCsvExport(rows, assessment);
+      return new NextResponse(csv, {
+        headers: {
+          "Content-Type": "text/csv",
+          "Content-Disposition": 'attachment; filename="fair-risk-radar-export.csv"',
+        },
+      });
+    }
 
-  if (format === "csv") {
-    const csv = buildCsv(input);
-    return new NextResponse(csv, {
+    const pdfBytes = await buildPdfExport(rows, assessment);
+    return new NextResponse(Buffer.from(pdfBytes), {
       headers: {
-        "Content-Type": "text/csv",
-        "Content-Disposition": `attachment; filename="${filenameBase}.csv"`,
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'attachment; filename="fair-risk-radar-export.pdf"',
       },
     });
+  } catch (err) {
+    console.error("GET /api/reports/export failed:", err);
+    return NextResponse.json({ error: "Failed to generate export" }, { status: 500 });
   }
-
-  const pdfBytes = await buildPdf(input);
-  return new NextResponse(Buffer.from(pdfBytes), {
-    headers: {
-      "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="${filenameBase}.pdf"`,
-    },
-  });
 }

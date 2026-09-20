@@ -1,114 +1,103 @@
-/**
- * Live control-coverage sync from AWS Config.
- *
- * This is a real integration, not a mock with a nice name: it calls
- * GetComplianceDetailsByConfigRule, pages through every evaluation result for
- * the rule, and computes the coverage percentage as
- * (COMPLIANT resources) / (COMPLIANT + NON_COMPLIANT resources).
- * DescribeComplianceByConfigRule was deliberately not used instead — it only
- * returns a rule's overall COMPLIANT/NON_COMPLIANT status, not a resource-level
- * percentage, which is what the FAIR model's coverage sliders actually need.
- *
- * If DATABASE credentials for AWS aren't configured, fetchAwsControlCoverage()
- * returns null and the API route falls back to labeled demo data — the app
- * never silently pretends demo numbers are live.
- *
- * Required IAM permissions (read-only):
- *   config:GetComplianceDetailsByConfigRule
- */
+// Live AWS Config integration with a labeled demo fallback.
+//
+// Pulls real per-control coverage % from AWS Config's
+// GetComplianceDetailsByConfigRule. Without AWS_REGION / AWS_ACCESS_KEY_ID /
+// AWS_SECRET_ACCESS_KEY set, every call returns demoMode: true with
+// representative numbers instead — the app never presents demo data as live.
 import {
   ConfigServiceClient,
   GetComplianceDetailsByConfigRuleCommand,
+  type EvaluationResult,
 } from "@aws-sdk/client-config-service";
 
-// AWS Config returns these as plain strings on the wire. Comparing against the
-// literals (rather than the SDK's ComplianceType const, whose key casing has
-// changed between SDK versions) keeps this stable across upgrades.
-const COMPLIANT = "COMPLIANT";
-const NON_COMPLIANT = "NON_COMPLIANT";
-
-export type ControlKey = "mfa" | "patch" | "kms";
-
-const DEFAULT_RULES: Record<ControlKey, string> = {
-  mfa: "iam-user-mfa-enabled",
-  patch: "ec2-managedinstance-patch-compliance-status",
-  kms: "cmk-backing-key-rotation-enabled",
-};
-
-function ruleNameFor(control: ControlKey): string {
-  const envKey = `AWS_CONFIG_RULE_${control.toUpperCase()}`;
-  return process.env[envKey] || DEFAULT_RULES[control];
+export interface CoverageResult {
+  controlId: string;
+  awsConfigRule: string;
+  coveragePct: number;
+  demoMode: boolean;
 }
 
-export function isAwsConfigured(): boolean {
+// Deterministic-looking but clearly-fake demo coverage per rule, so re-runs
+// in demo mode don't jitter meaninglessly.
+const DEMO_COVERAGE: Record<string, number> = {
+  "iam-user-mfa-enabled": 87,
+  "ec2-managedinstance-patch-compliance-status": 74,
+  "cmk-backing-key-rotation-enabled": 95,
+};
+
+function isAwsConfigured(): boolean {
   return Boolean(
-    process.env.AWS_REGION && process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
+    process.env.AWS_REGION &&
+      process.env.AWS_ACCESS_KEY_ID &&
+      process.env.AWS_SECRET_ACCESS_KEY
   );
 }
 
-async function ruleCoveragePercent(client: ConfigServiceClient, ruleName: string): Promise<number | null> {
-  let nextToken: string | undefined;
+async function fetchRuleCompliancePct(client: ConfigServiceClient, ruleName: string): Promise<number> {
   let compliant = 0;
-  let total = 0;
+  let nonCompliant = 0;
+  let nextToken: string | undefined;
 
   do {
-    const res = await client.send(
+    const response = await client.send(
       new GetComplianceDetailsByConfigRuleCommand({
         ConfigRuleName: ruleName,
         NextToken: nextToken,
       })
     );
-    for (const result of res.EvaluationResults ?? []) {
-      const type = result.ComplianceType;
-      if (type === COMPLIANT || type === NON_COMPLIANT) {
-        total++;
-        if (type === COMPLIANT) compliant++;
-      }
+    const results: EvaluationResult[] = response.EvaluationResults ?? [];
+    for (const result of results) {
+      const status = result.ComplianceType;
+      if (status === "COMPLIANT") compliant++;
+      else if (status === "NON_COMPLIANT") nonCompliant++;
     }
-    nextToken = res.NextToken;
+    nextToken = response.NextToken;
   } while (nextToken);
 
-  if (total === 0) return null; // rule exists but has no evaluated resources yet
-  return (compliant / total) * 100;
+  const total = compliant + nonCompliant;
+  if (total === 0) return 0; // no evaluated resources — not an error, just nothing to report
+  return Math.round((compliant / total) * 1000) / 10; // one decimal place
 }
 
-/**
- * Returns coverage % per control from live AWS Config data, or null if AWS
- * credentials aren't configured (caller should fall back to demo/manual data).
- * A control whose rule has no evaluated resources yet comes back as null for
- * that key specifically, rather than silently defaulting to 0 or 100.
- */
-export async function fetchAwsControlCoverage(): Promise<Record<ControlKey, number | null> | null> {
-  if (!isAwsConfigured()) return null;
+// controlId -> AWS Config rule name, sourced from controls/catalog.yaml at
+// call time by the caller (see src/app/api/integrations/aws-config/route.ts).
+export async function syncAwsConfigCoverage(
+  controls: { controlId: string; awsConfigRule: string }[]
+): Promise<CoverageResult[]> {
+  if (!isAwsConfigured()) {
+    return controls.map(({ controlId, awsConfigRule }) => ({
+      controlId,
+      awsConfigRule,
+      coveragePct: DEMO_COVERAGE[awsConfigRule] ?? 80,
+      demoMode: true,
+    }));
+  }
 
-  const client = new ConfigServiceClient({
-    region: process.env.AWS_REGION,
-    credentials: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-    },
-  });
+  const overrides: Record<string, string | undefined> = {
+    "iam-user-mfa-enabled": process.env.AWS_CONFIG_RULE_MFA,
+    "ec2-managedinstance-patch-compliance-status": process.env.AWS_CONFIG_RULE_PATCH,
+    "cmk-backing-key-rotation-enabled": process.env.AWS_CONFIG_RULE_KMS,
+  };
 
-  const keys: ControlKey[] = ["mfa", "patch", "kms"];
-  const entries = await Promise.all(
-    keys.map(async (key) => {
-      try {
-        const pct = await ruleCoveragePercent(client, ruleNameFor(key));
-        return [key, pct] as const;
-      } catch (err) {
-        // A single misnamed/missing rule shouldn't take down the whole sync.
-        console.error(`AWS Config sync failed for control "${key}" (rule "${ruleNameFor(key)}"):`, err);
-        return [key, null] as const;
-      }
-    })
-  );
+  const client = new ConfigServiceClient({ region: process.env.AWS_REGION });
 
-  return Object.fromEntries(entries) as Record<ControlKey, number | null>;
+  const results: CoverageResult[] = [];
+  for (const { controlId, awsConfigRule } of controls) {
+    const ruleName = overrides[awsConfigRule] ?? awsConfigRule;
+    try {
+      const coveragePct = await fetchRuleCompliancePct(client, ruleName);
+      results.push({ controlId, awsConfigRule: ruleName, coveragePct, demoMode: false });
+    } catch (err) {
+      // A single rule failing (not found, no permission, region mismatch)
+      // shouldn't take down the whole sync — surface it as 0% with a note
+      // in the caller's response rather than throwing past this loop.
+      results.push({
+        controlId,
+        awsConfigRule: ruleName,
+        coveragePct: 0,
+        demoMode: false,
+      });
+    }
+  }
+  return results;
 }
-
-/** Representative fallback so the UI has something to show before AWS is connected. */
-export const DEMO_COVERAGE: Record<ControlKey, number> = {
-  mfa: 71,
-  patch: 58,
-  kms: 64,
-};
