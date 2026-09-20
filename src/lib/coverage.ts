@@ -10,6 +10,7 @@ export interface FrameworkCoverage {
   label: string;
   field: FrameworkColumn["field"];
   mappedCount: number;
+  controlIds: string[];
   coveragePct: number | null; // null when no control maps to this framework
 }
 
@@ -32,6 +33,7 @@ export function coverageByFramework(
       label: f.label,
       field: f.field,
       mappedCount: mapped.length,
+      controlIds: mapped.map((c) => c.id).sort(),
       coveragePct:
         mapped.length > 0 ? mapped.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / mapped.length : null,
     };
@@ -46,4 +48,17 @@ export function averageOfFrameworks(rows: FrameworkCoverage[]): number {
   const scored = rows.filter((r) => r.coveragePct !== null);
   if (scored.length === 0) return 0;
   return scored.reduce((sum, r) => sum + (r.coveragePct ?? 0), 0) / scored.length;
+}
+
+
+// Frameworks whose mapped control set is IDENTICAL to this one's. Coverage is
+// stored per control, not per control-per-framework, so two frameworks that
+// map the same controls are the same average by definition — their sliders
+// can never disagree, no matter how the write is done. That is a property of
+// the data model, not a bug, and the UI should say so rather than pretend the
+// sliders are independent.
+export function identicalSetPeers(row: FrameworkCoverage, all: FrameworkCoverage[]): string[] {
+  if (row.controlIds.length === 0) return [];
+  const key = row.controlIds.join("|");
+  return all.filter((o) => o.id !== row.id && o.controlIds.join("|") === key).map((o) => o.label);
 }

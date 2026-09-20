@@ -18,6 +18,7 @@ export function MultiSelectDropdown({
   onChange,
   placeholder,
   itemNoun = "items",
+  footer,
 }: {
   label: string;
   options: MultiSelectOption[];
@@ -25,6 +26,7 @@ export function MultiSelectDropdown({
   onChange: (ids: string[]) => void;
   placeholder: string;
   itemNoun?: string;
+  footer?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -82,6 +84,7 @@ export function MultiSelectDropdown({
               </span>
             </label>
           ))}
+          {footer && <div className="border-t border-border/60 px-3 py-2.5">{footer}</div>}
         </div>
       )}
     </div>

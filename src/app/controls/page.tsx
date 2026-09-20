@@ -7,7 +7,8 @@ import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { UploadCatalogPanel } from "@/components/UploadCatalogPanel";
 import { EvidenceModal } from "@/components/EvidenceModal";
 import type { NormalizedControl } from "@/lib/catalog-parser";
-import { coverageByFramework, averageOfFrameworks, mapsToFramework } from "@/lib/coverage";
+import { coverageByFramework, averageOfFrameworks, mapsToFramework, identicalSetPeers } from "@/lib/coverage";
+import { Modal } from "@/components/Modal";
 
 export default function ControlsPage() {
   const [frameworks, setFrameworks] = useState<FrameworkColumn[]>([]);
@@ -31,6 +32,9 @@ export default function ControlsPage() {
   // round of PATCHes.
   const [draftFw, setDraftFw] = useState<Record<string, number>>({});
   const [savingFw, setSavingFw] = useState<string | null>(null);
+  const [requestOpen, setRequestOpen] = useState(false);
+  const [reqName, setReqName] = useState("");
+  const [reqReason, setReqReason] = useState("");
 
   async function load() {
     try {
@@ -233,6 +237,7 @@ export default function ControlsPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-4">
             {frameworkCoverage.map((f) => {
               const counted = frameworkIds.length === 0 || frameworkIds.includes(f.id);
+              const peers = identicalSetPeers(f, frameworkCoverage);
               const live = draftFw[f.id] ?? f.coveragePct ?? 0;
               const disabled = f.coveragePct === null || savingFw !== null || !!uploaded;
               return (
@@ -241,6 +246,16 @@ export default function ControlsPage() {
                     <span className="text-sm text-slate-300 truncate" title={f.label}>
                       {f.label}
                       {!counted && <span className="text-[10px] text-slate-600 ml-1.5">not counted</span>}
+                      {peers.length > 0 && (
+                        <span
+                          className="text-[10px] text-slate-500 ml-1.5 border border-border rounded px-1 py-px"
+                          title={`Maps to exactly the same controls as: ${peers.join(
+                            ", "
+                          )}. Coverage is stored per control, so these frameworks always share one number.`}
+                        >
+                          same set as {peers.length} other{peers.length === 1 ? "" : "s"}
+                        </span>
+                      )}
                     </span>
                     <span className="flex items-baseline gap-2 shrink-0">
                       <span
@@ -291,6 +306,15 @@ export default function ControlsPage() {
             options={frameworks.map((f) => ({ id: f.id, label: f.label }))}
             selected={frameworkIds}
             onChange={setFrameworkIds}
+            footer={
+              <button
+                type="button"
+                onClick={() => setRequestOpen(true)}
+                className="w-full text-left text-xs text-accent hover:text-accent2"
+              >
+                + Request another framework&hellip;
+              </button>
+            }
           />
         </div>
         <div className="flex gap-2">
@@ -330,6 +354,57 @@ export default function ControlsPage() {
         onLoaded={(parsed, filename) => setUploaded({ filename, controls: parsed })}
         onCleared={() => setUploaded(null)}
       />
+
+      {requestOpen && (
+        <Modal title="Request a framework" onClose={() => setRequestOpen(false)}>
+          <p className="text-sm text-slate-400 mb-4">
+            Tell us which framework you need mapped and we&apos;ll add it to the control catalogue. Existing controls get
+            cross-mapped to it, so coverage carries over — you will not be starting from zero.
+          </p>
+          <label className="flex flex-col gap-1.5 mb-3">
+            <span className="text-xs font-medium text-slate-400">Framework</span>
+            <input
+              className="select"
+              value={reqName}
+              onChange={(e) => setReqName(e.target.value)}
+              placeholder="e.g. NIS2, DORA, HIPAA Security Rule, CIS Controls v8"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 mb-4">
+            <span className="text-xs font-medium text-slate-400">What is driving it? (optional)</span>
+            <textarea
+              className="select"
+              rows={3}
+              value={reqReason}
+              onChange={(e) => setReqReason(e.target.value)}
+              placeholder="e.g. customer contract, regulator, upcoming audit"
+            />
+          </label>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setRequestOpen(false)}
+              className="text-sm px-3 py-2 rounded-lg border border-border text-slate-300 hover:bg-white/10"
+            >
+              Cancel
+            </button>
+            {/* ponytail: mailto is the whole submission pipeline — no endpoint,
+                no schema, and it genuinely reaches a person. Swap for a POST to
+                a FrameworkRequest table when these need tracking or an SLA. */}
+            <a
+              href={`mailto:grc@fair-risk-radar.example?subject=${encodeURIComponent(
+                `Framework request: ${reqName || "(unnamed)"}`
+              )}&body=${encodeURIComponent(
+                `Framework: ${reqName}\n\nDriver: ${reqReason}\n\nCurrent catalogue: ${controls.length} controls across ${frameworks.length} frameworks.`
+              )}`}
+              onClick={() => setRequestOpen(false)}
+              className={`btn-primary ${reqName.trim() === "" ? "pointer-events-none opacity-40" : ""}`}
+            >
+              Send request
+            </a>
+          </div>
+        </Modal>
+      )}
 
       {evidenceFor && (
         <EvidenceModal
