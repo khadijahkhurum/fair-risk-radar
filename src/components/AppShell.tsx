@@ -60,15 +60,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setHydrated(true);
   }, []);
 
+  function persist(next: boolean) {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
+    } catch {
+      // private mode / storage disabled — the toggle still works this session
+    }
+  }
+
   function toggle() {
     setOpen((v) => {
-      try {
-        window.localStorage.setItem(STORAGE_KEY, v ? "0" : "1");
-      } catch {
-        // private mode / storage disabled — the toggle still works this session
-      }
+      persist(!v);
       return !v;
     });
+  }
+
+  // Collapse after navigating. On phones the panel covers the page, so
+  // leaving it open would hide whatever you just navigated to; on desktop it
+  // drops to the icon rail, so nav is still one click away and the page gets
+  // its width back — which is the point of collapsing it at all.
+  function closeAfterNav() {
+    setOpen(false);
+    persist(false);
   }
 
   return (
@@ -129,6 +142,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 href={href}
                 title={label}
                 aria-label={label}
+                onClick={closeAfterNav}
                 aria-current={active ? "page" : undefined}
                 className={`relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg whitespace-nowrap ${
                   active ? "text-slate-100 font-medium" : "text-slate-400 hover:text-slate-100"
