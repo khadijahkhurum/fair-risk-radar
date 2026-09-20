@@ -364,7 +364,7 @@ export default function RoiPage() {
             onChange={setThreatIds}
           />
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-400">Risk tolerance (USD/year, optional)</span>
+            <span className="text-xs font-medium text-slate-400">Risk tolerance (USD/year) · optional</span>
             <input
               className="select"
               type="number"
@@ -375,14 +375,18 @@ export default function RoiPage() {
             />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-400">Annual cost to reach 100% coverage (USD)</span>
+            <span className="text-xs font-medium text-slate-400">
+              Annual cost to reach 100% coverage (USD){" "}
+              <span className="text-amber-400 font-semibold">· required</span>
+            </span>
             <input
-              className="select"
+              className={`select ${costAt100 === "" ? "border-amber-400/60" : ""}`}
               type="number"
               min={0}
               value={costAt100}
               onChange={(e) => setCostAt100(e.target.value)}
               placeholder="e.g. 400000"
+              aria-describedby="cost-required-note"
             />
           </label>
         </div>
@@ -417,6 +421,33 @@ export default function RoiPage() {
           {loading && <span className="text-xs text-slate-500">Running {coverageSteps.length} simulations…</span>}
         </div>
       </div>
+
+      {costAt100 === "" && (
+        <div
+          id="cost-required-note"
+          className="rounded-xl border border-amber-400/40 bg-amber-500/10 p-4 mb-6 text-sm"
+        >
+          <span className="font-semibold text-amber-400">No cost entered — the ROI analysis has not run. </span>
+          <span className="text-slate-300">
+            Risk tolerance is optional and only drives the exceedance view below. Return on investment needs a cost
+            figure.{" "}
+            {maxAvoidable !== null
+              ? `Controls can remove at most ${currencyFull(
+                  maxAvoidable
+                )}/year of loss in this scenario, so a credible remediation budget sits below that.`
+              : ""}
+          </span>
+          {maxAvoidable !== null && maxAvoidable > 0 && (
+            <button
+              type="button"
+              onClick={() => setCostAt100(String(Math.round(maxAvoidable * 0.25)))}
+              className="ml-2 text-xs px-2.5 py-1 rounded-lg border border-white/15 text-slate-200 hover:bg-white/10"
+            >
+              Start at {currencyFull(maxAvoidable * 0.25)}
+            </button>
+          )}
+        </div>
+      )}
 
       {toleranceSet && ceilingExceedance !== null && (
         <div
