@@ -36,7 +36,7 @@ interface CurvePoint {
   cost: number;
   riskAvoided: number;
   netBenefit: number;
-  rosiPct: number | null;
+  benefitCostRatio: number | null;
 }
 
 const COVERAGE_STEPS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
@@ -60,6 +60,12 @@ export default function RoiPage() {
   // not just a hypothetical sweep — this is what anchors the curve to where
   // the organization actually stands today instead of pure theory.
   const [currentCoveragePct, setCurrentCoveragePct] = useState<number | null>(null);
+  // Bumped by the "Recalculate" button — in the sweep effect's own
+  // dependency array purely to force a re-run on demand, since 12
+  // sequential simulation calls behind a 400ms debounce can take a couple
+  // seconds and the old chart otherwise just sits there with no visible
+  // sign anything is happening.
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
     fetch("/api/scenarios")
@@ -125,8 +131,14 @@ export default function RoiPage() {
           const cost = cost100 * (coverage / 100) ** 2;
           const riskAvoided = baselineAle - result.meanAle;
           const netBenefit = riskAvoided - cost;
-          const rosiPct = cost > 0 ? (netBenefit / cost) * 100 : null;
-          return { coverage, meanAle: result.meanAle, pExceedTolerance: result.pExceedTolerance, cost, riskAvoided, netBenefit, rosiPct };
+          // A benefit-cost ratio ("$X returned per $1 spent"), not a raw
+          // percentage — at these loss magnitudes a modest control budget
+          // produces a percentage in the thousands, which reads as a broken
+          // calculation to anyone looking at it rather than an impressive
+          // one. A ratio like "225x" or "$225 per $1" is the way this kind
+          // of extreme return is actually presented in security economics.
+          const benefitCostRatio = cost > 0 ? riskAvoided / cost : null;
+          return { coverage, meanAle: result.meanAle, pExceedTolerance: result.pExceedTolerance, cost, riskAvoided, netBenefit, benefitCostRatio };
         });
         setCurve(points);
       } catch (err) {
@@ -136,7 +148,7 @@ export default function RoiPage() {
       }
     }, 400);
     return () => clearTimeout(handle);
-  }, [scenarioId, threatIds, riskTolerance, costAt100, coverageSteps]);
+  }, [scenarioId, threatIds, riskTolerance, costAt100, coverageSteps, refreshNonce]);
 
   const optimalPoint = useMemo(() => {
     if (curve.length === 0) return null;
@@ -292,6 +304,17 @@ export default function RoiPage() {
           Cost is modeled as scaling with the square of coverage — cheap early wins, disproportionately expensive to
           close the last gap — not a sourced budget curve. Enter what full (100%) remediation would realistically cost.
         </p>
+        <div className="flex items-center gap-3 mt-4">
+          <button
+            type="button"
+            onClick={() => setRefreshNonce((n) => n + 1)}
+            disabled={loading || !scenarioId}
+            className="btn-primary"
+          >
+            {loading ? "Recalculating…" : "Recalculate"}
+          </button>
+          {loading && <span className="text-xs text-slate-500">Running {coverageSteps.length} simulations…</span>}
+        </div>
       </div>
 
       {currentPoint && costAt100 && (
@@ -322,7 +345,11 @@ export default function RoiPage() {
           <p className="text-sm text-slate-400 mt-2">
             Net benefit peaks here at {currencyFull(optimalPoint.netBenefit)}/year — {currencyFull(optimalPoint.riskAvoided)}{" "}
             in avoided loss against {currencyFull(optimalPoint.cost)} in control spend
-            {optimalPoint.rosiPct !== null ? ` (${optimalPoint.rosiPct >= 0 ? "+" : ""}${optimalPoint.rosiPct.toFixed(0)}% ROSI)` : ""}
+            {optimalPoint.benefitCostRatio !== null
+              ? ` (${optimalPoint.benefitCostRatio.toFixed(1)}x return — $${optimalPoint.benefitCostRatio.toFixed(
+                  2
+                )} avoided per $1 spent)`
+              : ""}
             .{" "}
             {optimalPoint.coverage < 100
               ? `Pushing coverage past this point costs more than the risk it removes — the classic diminishing-returns curve behind every "how much security is enough" conversation.`
@@ -340,7 +367,7 @@ export default function RoiPage() {
             Where the two lines cross is where further spend stops being worth it. The amber point marks today&apos;s
             actual coverage.
           </p>
-          <div className="h-72">
+          <div className={`h-72 transition-opacity ${loading ? "opacity-40" : "opacity-100"}`}>
             {lossVsCostConfig ? <ChartCanvas config={lossVsCostConfig} /> : <p className="text-sm text-slate-500">{loading ? "Simulating…" : "Pick a scenario to begin."}</p>}
           </div>
         </div>
@@ -349,7 +376,7 @@ export default function RoiPage() {
           <p className="text-xs text-slate-500 mb-3">
             Green bar is the optimum; amber is today&apos;s actual coverage (if different).
           </p>
-          <div className="h-72">
+          <div className={`h-72 transition-opacity ${loading ? "opacity-40" : "opacity-100"}`}>
             {netBenefitConfig ? <ChartCanvas config={netBenefitConfig} /> : <p className="text-sm text-slate-500">{loading ? "Simulating…" : "Pick a scenario to begin."}</p>}
           </div>
         </div>
