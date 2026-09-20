@@ -218,10 +218,50 @@ export default function RoiPage() {
   // The lowest coverage level that actually gets inside the appetite bar.
   // "Reachable at 100%" and "red at today's 75%" are both true and read as a
   // contradiction side by side — this is the number that reconciles them.
+  // The sweep only samples every 10 points, so "the first sampled level that
+  // is green" rounds the requirement UP to the next grid line — reporting
+  // "you need 100%" when 91% would actually do. Interpolate between the two
+  // bracketing points and round up to the next whole percent instead: same
+  // coarse simulation, an answer that is not overstated by up to 10 points.
   const minGreenCoverage = useMemo(() => {
-    const hit = curve.find((p) => p.pExceedTolerance !== null && p.pExceedTolerance <= TARGET_EXCEED_PROBABILITY);
-    return hit ? hit.coverage : null;
+    const idx = curve.findIndex((p) => p.pExceedTolerance !== null && p.pExceedTolerance <= TARGET_EXCEED_PROBABILITY);
+    if (idx === -1) return null;
+    const hit = curve[idx];
+    const prev = idx > 0 ? curve[idx - 1] : null;
+    if (!prev || prev.pExceedTolerance === null || hit.pExceedTolerance === null) return hit.coverage;
+    const span = prev.pExceedTolerance - hit.pExceedTolerance;
+    if (span <= 0) return hit.coverage;
+    const t = (prev.pExceedTolerance - TARGET_EXCEED_PROBABILITY) / span;
+    return Math.min(100, Math.ceil(prev.coverage + t * (hit.coverage - prev.coverage)));
   }, [curve]);
+
+  // What satisfying the appetite costs ON TOP of the economically optimal
+  // spend. These are two different questions — "where does control spend stop
+  // paying for itself" and "how much coverage does our stated appetite
+  // demand" — and they routinely have different answers. Showing only the
+  // second makes the tool look like it always says "buy everything".
+  const compliancePremium = useMemo(() => {
+    if (!optimalPoint || minGreenCoverage === null || !costAt100) return null;
+    if (minGreenCoverage <= optimalPoint.coverage) return null;
+    const cost100 = Number(costAt100);
+    const costAtGreen = cost100 * (minGreenCoverage / 100) ** 2;
+    // Interpolate avoided loss at the green level from the bracketing points.
+    const above = curve.find((p) => p.coverage >= minGreenCoverage);
+    const below = [...curve].reverse().find((p) => p.coverage <= minGreenCoverage);
+    if (!above || !below) return null;
+    const avoided =
+      above.coverage === below.coverage
+        ? above.riskAvoided
+        : below.riskAvoided +
+          ((minGreenCoverage - below.coverage) / (above.coverage - below.coverage)) *
+            (above.riskAvoided - below.riskAvoided);
+    return {
+      coverage: minGreenCoverage,
+      cost: costAtGreen,
+      netBenefit: avoided - costAtGreen,
+      forgone: optimalPoint.netBenefit - (avoided - costAtGreen),
+    };
+  }, [optimalPoint, minGreenCoverage, costAt100, curve]);
   const toleranceUnreachable =
     toleranceSet && ceilingExceedance !== null && ceilingExceedance > TARGET_EXCEED_PROBABILITY;
   // If controls can't get there, the actionable answer isn't "spend more" —
@@ -506,7 +546,7 @@ export default function RoiPage() {
               {currentCoveragePct !== null && minGreenCoverage > currentCoveragePct ? (
                 <>
                   <span className="text-slate-400">But not yet: </span>
-                  you need at least{" "}
+                  you need roughly{" "}
                   <span className="font-mono font-semibold text-slate-100">{minGreenCoverage}%</span> coverage to get
                   inside the bar, and you are at{" "}
                   <span className="font-mono font-semibold text-amber-400">{currentCoveragePct}%</span> today — which is
@@ -626,6 +666,24 @@ export default function RoiPage() {
               : `At this cost, full coverage still returns more than it spends at every step — this control investment dominates the risk regardless of how far you push it. To see an interior trade-off point instead of a corner solution, try a higher cost estimate (roughly ${currencyFull(
                   optimalPoint.riskAvoided * 0.6
                 )}+) — that's the range where the model starts weighing cost against risk instead of one obviously winning.`}
+          </p>
+        </div>
+      )}
+
+      {compliancePremium && (
+        <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 p-5 mb-6">
+          <div className="text-xs font-medium text-slate-400 mb-1">Cost of compliance, above the economic optimum</div>
+          <div className="text-xl font-mono font-semibold text-slate-100">
+            {optimalPoint?.coverage}% &rarr; {compliancePremium.coverage}% coverage
+          </div>
+          <p className="text-sm text-slate-400 mt-2">
+            These are two different questions and they have two different answers. Net benefit peaks at{" "}
+            <span className="text-slate-200">{optimalPoint?.coverage}%</span> — that is where control spend stops
+            paying for itself. Your stated appetite needs{" "}
+            <span className="text-slate-200">{compliancePremium.coverage}%</span>. Going the extra distance costs{" "}
+            <span className="font-mono text-amber-400">{currencyFull(compliancePremium.forgone)}/year</span> in
+            forgone net benefit — that is the price of the appetite itself, not a failure of the investment case. It is
+            a legitimate number to take to a board: either fund it, or revisit the appetite.
           </p>
         </div>
       )}
