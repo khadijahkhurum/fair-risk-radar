@@ -76,15 +76,33 @@ export default function ControlsPage() {
     }
   }
 
-  // Set every control mapped to this framework to the same coverage.
-  async function applyFrameworkCoverage(fwId: string, pct: number) {
+  // SHIFT the mapped controls by the delta needed to move this framework's
+  // average to the target — don't flatten them all to the same number.
+  // Flattening sets every control to one value, and since the frameworks
+  // share most of their controls, that forced all six averages to become
+  // identical: the sliders could never disagree. Shifting preserves each
+  // control's own level, so frameworks with different control sets land on
+  // different averages. Shared controls still move (that is real — they are
+  // the same control), just not to the same place.
+  async function applyFrameworkCoverage(fwId: string, targetPct: number) {
     const fw = frameworks.find((f) => f.id === fwId);
     if (!fw) return;
     const mapped = controls.filter((c) => mapsToFramework(c, fw.field));
     if (mapped.length === 0) return;
+    const current = mapped.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / mapped.length;
+    const delta = targetPct - current;
+    if (Math.round(delta) === 0) return;
     setSavingFw(fwId);
     try {
-      await Promise.all(mapped.map((c) => patchCoverage(c.id, pct)));
+      await Promise.all(
+        mapped.map((c) => {
+          // Clamped, so a control already at 0 or 100 stops there — the
+          // framework average may then fall slightly short of the target,
+          // and the slider snaps to the real value on reload.
+          const next = Math.min(Math.max(Math.round((c.coveragePct ?? 0) + delta), 0), 100);
+          return patchCoverage(c.id, next);
+        })
+      );
       await load();
     } finally {
       setSavingFw(null);
@@ -208,9 +226,9 @@ export default function ControlsPage() {
             </span>
           </div>
           <p className="text-[11px] text-slate-500 mb-4">
-            Drag a slider to set every control mapped to that framework at once. Controls are cross-mapped, so moving
-            one framework moves the others that share those controls — that overlap is the point of a single control
-            catalogue.
+            Drag a slider to shift every control mapped to that framework. Controls are cross-mapped, so related
+            frameworks move too — by less, in proportion to how many controls they share. That coupling is real: it is
+            the same control being counted by both frameworks, which is the point of one cross-mapped catalogue.
           </p>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-4">
             {frameworkCoverage.map((f) => {
