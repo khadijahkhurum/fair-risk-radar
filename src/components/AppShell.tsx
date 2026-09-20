@@ -46,12 +46,32 @@ function IconTransfer() {
   );
 }
 
+function IconBook() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+      <path d="M4 5.5A1.5 1.5 0 015.5 4H10a2 2 0 012 2v13a2 2 0 00-2-2H5.5A1.5 1.5 0 014 15.5v-10z" />
+      <path d="M20 5.5A1.5 1.5 0 0018.5 4H14a2 2 0 00-2 2v13a2 2 0 012-2h4.5a1.5 1.5 0 001.5-1.5v-10z" />
+    </svg>
+  );
+}
+
+function IconAudit() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+      <path d="M5 4h9l5 5v11a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z" />
+      <path d="M14 4v5h5M8 13h6M8 17h4" />
+    </svg>
+  );
+}
+
 const NAV = [
   { href: "/", label: "Risk Simulator", Icon: IconSimulator },
   { href: "/controls", label: "Control Posture", Icon: IconControls },
   { href: "/risks", label: "Risk Register", Icon: IconRegister },
   { href: "/roi", label: "ROI Analysis", Icon: IconRoi },
   { href: "/transfer", label: "Risk Transfer", Icon: IconTransfer },
+  { href: "/audit", label: "Audit Trail", Icon: IconAudit },
+  { href: "/methodology", label: "Methodology", Icon: IconBook },
 ];
 
 const STORAGE_KEY = "frr-sidebar-open";

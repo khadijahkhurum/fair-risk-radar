@@ -73,6 +73,31 @@ export default function RoiPage() {
   // sign anything is happening.
   const [refreshNonce, setRefreshNonce] = useState(0);
 
+  // Re-read today's actual coverage whenever this tab becomes active again.
+  // Coverage is edited on another page (often in another tab), and a figure
+  // fetched once on mount goes stale the moment someone changes it there —
+  // which looks exactly like the number being hardcoded.
+  useEffect(() => {
+    function refreshCoverage() {
+      if (document.visibilityState !== "visible") return;
+      fetch("/api/scenarios", { cache: "no-store" })
+        .then((r) => r.json())
+        .then((data) => {
+          const rows = (data.controls ?? []) as ControlRow[];
+          if (rows.length > 0) {
+            setCurrentCoveragePct(Math.round(rows.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / rows.length));
+          }
+        })
+        .catch(() => {});
+    }
+    window.addEventListener("focus", refreshCoverage);
+    document.addEventListener("visibilitychange", refreshCoverage);
+    return () => {
+      window.removeEventListener("focus", refreshCoverage);
+      document.removeEventListener("visibilitychange", refreshCoverage);
+    };
+  }, []);
+
   useEffect(() => {
     fetch("/api/scenarios", { cache: "no-store" })
       .then((r) => r.json())

@@ -63,6 +63,26 @@ export default function TransferPage() {
       .catch(() => setLoadError("Failed to load scenarios"));
   }, []);
 
+  // Same staleness trap as the ROI page: coverage is edited elsewhere.
+  useEffect(() => {
+    function refresh() {
+      if (document.visibilityState !== "visible") return;
+      fetch("/api/scenarios", { cache: "no-store" })
+        .then((r) => r.json())
+        .then((data) => {
+          const rows = (data.controls ?? []) as ControlRow[];
+          if (rows.length > 0) setCoveragePct(Math.round(rows.reduce((s, c) => s + (c.coveragePct ?? 0), 0) / rows.length));
+        })
+        .catch(() => {});
+    }
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+
   const toleranceValue = tolerance ? Number(tolerance) : null;
 
   useEffect(() => {
@@ -262,7 +282,9 @@ export default function TransferPage() {
         >
           <div className="text-xs font-medium text-slate-400 mb-2">P(loss &gt; tolerance)</div>
           <div className="flex items-center gap-4 flex-wrap">
-            <span className="font-mono text-2xl font-semibold text-risk">{pct(grossExceed)}</span>
+            <span className={`font-mono text-2xl font-semibold ${grossGreen ? "text-emerald-400" : "text-risk"}`}>
+              {pct(grossExceed)}
+            </span>
             <span className="text-slate-500 text-xl">&rarr;</span>
             <span className={`font-mono text-2xl font-semibold ${netGreen ? "text-emerald-400" : "text-risk"}`}>{pct(netExceed)}</span>
             <span className="text-xs text-slate-500">uninsured &rarr; after transfer</span>

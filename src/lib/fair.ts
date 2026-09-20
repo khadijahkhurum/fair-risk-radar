@@ -17,14 +17,14 @@
 import type { Scenario } from "./scenarios";
 import type { Threat } from "./threats";
 
-const DEFAULT_TRIALS = 8000;
+export const DEFAULT_TRIALS = 8000;
 const HISTOGRAM_BUCKETS = 24;
-const LEC_POINTS = 40;
+export const LEC_POINTS = 40;
 
 // Modeling assumption: average control coverage linearly reduces effective
 // vulnerability, capped at a 70% reduction — controls mitigate but don't
 // eliminate risk even at full nominal coverage. Documented, not sourced.
-const MAX_CONTROL_RISK_REDUCTION = 0.7;
+export const MAX_CONTROL_RISK_REDUCTION = 0.7;
 
 function sampleTriangular(min: number, mode: number, max: number): number {
   const u = Math.random();
