@@ -58,7 +58,7 @@ interface Run {
   avgControlCoveragePct: number;
 }
 
-const RUN_COLORS = ["#3454d1", "#0891b2", "#f59e0b", "#10b981"];
+const RUN_COLORS = ["#0a84ff", "#64d2ff", "#ff9f0a", "#30d158"];
 const MAX_RUNS = RUN_COLORS.length;
 const DEFAULT_TOLERANCE_MAX = 20_000_000;
 // Upper bound on a typed/pasted tolerance — blocks garbage like a pasted
@@ -427,7 +427,7 @@ export function Dashboard() {
           {
             label: "Simulated years",
             data: histogram.map((b) => b.count),
-            backgroundColor: histogram.map((_, i) => (toleranceIdx >= 0 && i >= toleranceIdx ? "#f43f5e" : "#6366f1")),
+            backgroundColor: histogram.map((_, i) => (toleranceIdx >= 0 && i >= toleranceIdx ? "#ff453a" : "#0a84ff")),
             borderRadius: 3,
             barPercentage: 1,
             categoryPercentage: 0.95,
@@ -519,7 +519,7 @@ export function Dashboard() {
           {
             label: "Mean ALE",
             data: ordered.map((h) => h.meanAle),
-            borderColor: "#6366f1",
+            borderColor: "#0a84ff",
             backgroundColor: "rgba(99, 102, 241, 0.12)",
             fill: true,
             tension: 0.25,

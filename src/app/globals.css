@@ -5,28 +5,107 @@
 @tailwind utilities;
 
 @layer components {
+  /* Inputs read as recessed fields, not outlined boxes. */
   .select {
-    @apply w-full bg-surface2 border border-border rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-accent/50;
+    @apply w-full bg-surface2/80 border border-border rounded-lg px-3 py-2 text-sm text-slate-100
+           focus:outline-none focus:border-accent/70 focus:ring-4 focus:ring-accent/20 transition-all;
   }
-  /* Flat, solid primary action — not a glossy gradient pill. */
+  /* Solid, slightly tactile primary action — pressed state instead of a hover glow. */
   .btn-primary {
-    @apply px-4 py-2 rounded-lg bg-accent text-white font-medium text-sm border border-accent/60 hover:bg-accent/90 disabled:opacity-50 transition-colors;
+    @apply px-4 py-2 rounded-lg bg-accent text-white font-medium text-sm
+           hover:bg-accent/90 active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100
+           shadow-card transition-all;
   }
+  /* Standard elevated panel. */
+  .card {
+    @apply rounded-2xl border border-border bg-surface shadow-card;
+  }
+}
+
+html {
+  color-scheme: dark;
 }
 
 body {
-  background-color: #0b0f17;
-  color: #e5e9f2;
+  background-color: #000000;
+  color: #f5f5f7;
+  /* The single biggest contributor to "looks like a Mac app" — without this,
+     Inter renders heavy and muddy on dark backgrounds. */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.011em;
+  font-feature-settings: "cv11", "ss01";
 }
 
+h1,
+h2,
+h3 {
+  letter-spacing: -0.022em;
+}
+
+::selection {
+  background-color: rgba(10, 132, 255, 0.35);
+}
+
+/* Overlay scrollbars, Apple-style: invisible until the pointer is over them. */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background-color: #26324a;
+  background-color: rgba(255, 255, 255, 0.14);
   border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.26);
 }
 ::-webkit-scrollbar-track {
   background-color: transparent;
+}
+
+/* Strip the spinner from number inputs — it's the loudest "unstyled web form"
+   tell in the whole UI. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* Range inputs: continuous track + a real thumb, matching a macOS slider. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: grab;
+  transition: transform 0.12s ease;
+}
+input[type="range"]::-webkit-slider-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.12);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: grab;
 }

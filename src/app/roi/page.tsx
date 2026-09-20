@@ -40,6 +40,9 @@ interface CurvePoint {
 }
 
 const COVERAGE_STEPS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+// Same 10% bar the Risk Simulator's green/red rule uses — one constant so the
+// two pages can't disagree about what "within tolerance" means.
+const TARGET_EXCEED_PROBABILITY = 0.1;
 
 const currency = (v: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 }).format(v);
@@ -160,12 +163,24 @@ export default function RoiPage() {
     return curve.find((p) => p.coverage === currentCoveragePct) ?? null;
   }, [curve, currentCoveragePct]);
 
+  // Net benefit says "is this spend worth it"; exceedance says "does it get us
+  // inside our stated risk appetite". Those are different questions, and a
+  // control program can pass the first while failing the second badly — so the
+  // page has to answer both instead of colouring everything green on ROI alone.
+  const toleranceSet = riskTolerance !== "" && Number(riskTolerance) > 0;
+  const fullCoveragePoint = useMemo(() => curve.find((p) => p.coverage === 100) ?? null, [curve]);
+  const ceilingExceedance = fullCoveragePoint?.pExceedTolerance ?? null;
+  const toleranceUnreachable =
+    toleranceSet && ceilingExceedance !== null && ceilingExceedance > TARGET_EXCEED_PROBABILITY;
+  const pctLabel = (p: number | null) => (p === null ? "—" : `${(p * 100).toFixed(2)}%`);
+  const withinTolerance = (p: number | null) => p !== null && p <= TARGET_EXCEED_PROBABILITY;
+
   const lossVsCostConfig: ChartConfiguration<"line"> | null = useMemo(() => {
     if (curve.length === 0) return null;
     // Highlight whichever point is today's real coverage — bigger, amber —
     // so the curve reads against reality, not just as an abstract sweep.
     const pointStyle = (color: string) =>
-      curve.map((p) => (p.coverage === currentCoveragePct ? "#f59e0b" : color));
+      curve.map((p) => (p.coverage === currentCoveragePct ? "#ff9f0a" : color));
     const pointSize = curve.map((p) => (p.coverage === currentCoveragePct ? 6 : 3));
     return {
       type: "line",
@@ -175,9 +190,9 @@ export default function RoiPage() {
           {
             label: "Expected Annual Loss",
             data: curve.map((p) => p.meanAle),
-            borderColor: "#f43f5e",
-            backgroundColor: "#f43f5e22",
-            pointBackgroundColor: pointStyle("#f43f5e"),
+            borderColor: "#ff453a",
+            backgroundColor: "#ff453a22",
+            pointBackgroundColor: pointStyle("#ff453a"),
             pointRadius: pointSize,
             tension: 0.25,
             fill: false,
@@ -185,9 +200,9 @@ export default function RoiPage() {
           {
             label: "Cumulative Control Cost",
             data: curve.map((p) => p.cost),
-            borderColor: "#0891b2",
-            backgroundColor: "#0891b222",
-            pointBackgroundColor: pointStyle("#0891b2"),
+            borderColor: "#64d2ff",
+            backgroundColor: "#64d2ff22",
+            pointBackgroundColor: pointStyle("#64d2ff"),
             pointRadius: pointSize,
             tension: 0.25,
             fill: false,
@@ -199,13 +214,13 @@ export default function RoiPage() {
         responsive: true,
         maintainAspectRatio: false,
         scales: {
-          x: { title: { display: true, text: "Control coverage" }, grid: { color: "#26324a" }, ticks: { color: "#94a3b8" } },
+          x: { title: { display: true, text: "Control coverage" }, grid: { color: "rgba(255,255,255,0.08)" }, ticks: { color: "#98989d" } },
           y: {
-            ticks: { color: "#94a3b8", callback: (v: any) => currency(Number(v)) },
-            grid: { color: "#26324a" },
+            ticks: { color: "#98989d", callback: (v: any) => currency(Number(v)) },
+            grid: { color: "rgba(255,255,255,0.08)" },
           },
         },
-        plugins: { legend: { labels: { color: "#cbd5e1" } } },
+        plugins: { legend: { labels: { color: "#d1d1d6" } } },
       },
     };
   }, [curve, currentCoveragePct]);
@@ -221,9 +236,9 @@ export default function RoiPage() {
             label: "Net benefit (risk avoided − cost)",
             data: curve.map((p) => p.netBenefit),
             backgroundColor: curve.map((p) => {
-              if (optimalPoint && p.coverage === optimalPoint.coverage) return "#10b981"; // optimal wins ties
-              if (p.coverage === currentCoveragePct) return "#f59e0b"; // today
-              return p.netBenefit >= 0 ? "#3454d1" : "#f43f5e";
+              if (optimalPoint && p.coverage === optimalPoint.coverage) return "#30d158"; // optimal wins ties
+              if (p.coverage === currentCoveragePct) return "#ff9f0a"; // today
+              return p.netBenefit >= 0 ? "#0a84ff" : "#ff453a";
             }),
           },
         ],
@@ -232,16 +247,59 @@ export default function RoiPage() {
         responsive: true,
         maintainAspectRatio: false,
         scales: {
-          x: { title: { display: true, text: "Control coverage" }, grid: { display: false }, ticks: { color: "#94a3b8" } },
+          x: { title: { display: true, text: "Control coverage" }, grid: { display: false }, ticks: { color: "#98989d" } },
           y: {
-            ticks: { color: "#94a3b8", callback: (v: any) => currency(Number(v)) },
-            grid: { color: "#26324a" },
+            ticks: { color: "#98989d", callback: (v: any) => currency(Number(v)) },
+            grid: { color: "rgba(255,255,255,0.08)" },
           },
         },
         plugins: { legend: { display: false } },
       },
     };
   }, [curve, optimalPoint]);
+
+  const exceedanceConfig: ChartConfiguration<"line"> | null = useMemo(() => {
+    if (curve.length === 0 || !toleranceSet) return null;
+    return {
+      type: "line",
+      data: {
+        labels: curve.map((p) => `${p.coverage}%`),
+        datasets: [
+          {
+            label: "P(annual loss > tolerance)",
+            data: curve.map((p) => (p.pExceedTolerance === null ? null : p.pExceedTolerance * 100)),
+            borderColor: "#ff453a",
+            backgroundColor: "#ff453a22",
+            pointBackgroundColor: curve.map((p) => (p.coverage === currentCoveragePct ? "#ff9f0a" : "#ff453a")),
+            pointRadius: curve.map((p) => (p.coverage === currentCoveragePct ? 6 : 3)),
+            tension: 0.25,
+            fill: true,
+          },
+          {
+            label: `Risk-appetite bar (${(TARGET_EXCEED_PROBABILITY * 100).toFixed(0)}%)`,
+            data: curve.map(() => TARGET_EXCEED_PROBABILITY * 100),
+            borderColor: "#30d158",
+            borderDash: [6, 5],
+            pointRadius: 0,
+            fill: false,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { title: { display: true, text: "Control coverage" }, grid: { display: false }, ticks: { color: "#98989d" } },
+          y: {
+            beginAtZero: true,
+            ticks: { color: "#98989d", callback: (v: any) => `${Number(v).toFixed(0)}%` },
+            grid: { color: "rgba(255,255,255,0.06)" },
+          },
+        },
+        plugins: { legend: { labels: { color: "#d1d1d6" } } },
+      },
+    };
+  }, [curve, currentCoveragePct, toleranceSet]);
 
   return (
     <AppShell>
@@ -332,10 +390,55 @@ export default function RoiPage() {
         </div>
       </div>
 
+      {toleranceSet && ceilingExceedance !== null && (
+        <div
+          className={`rounded-xl border p-4 mb-6 text-sm ${
+            toleranceUnreachable ? "border-risk/50 bg-risk/10 text-risk" : "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+          }`}
+        >
+          <span className="font-semibold">
+            {toleranceUnreachable ? "Tolerance not reachable through controls alone. " : "Tolerance reachable. "}
+          </span>
+          <span className="text-slate-300">
+            {toleranceUnreachable
+              ? `Even at 100% control coverage, annual loss still exceeds your ${currencyFull(
+                  Number(riskTolerance)
+                )} tolerance ${pctLabel(ceilingExceedance)} of the time — well above the ${(
+                  TARGET_EXCEED_PROBABILITY * 100
+                ).toFixed(0)}% bar. No amount of control spend closes this gap; it takes a higher tolerance, risk transfer (insurance), or exiting the exposure.`
+              : `At 100% control coverage, loss exceeds your ${currencyFull(Number(riskTolerance))} tolerance only ${pctLabel(
+                  ceilingExceedance
+                )} of the time — inside the ${(TARGET_EXCEED_PROBABILITY * 100).toFixed(0)}% bar.`}
+          </span>
+        </div>
+      )}
+
       {currentPoint && costAt100 && (
-        <div className="rounded-xl border border-accent/40 bg-accent/5 p-5 mb-6">
+        <div
+          className={`rounded-xl border p-5 mb-6 ${
+            toleranceSet
+              ? withinTolerance(currentPoint.pExceedTolerance)
+                ? "border-emerald-500/40 bg-emerald-500/5"
+                : "border-risk/40 bg-risk/5"
+              : "border-accent/40 bg-accent/5"
+          }`}
+        >
           <div className="text-xs font-medium text-slate-400 mb-1">Where you stand today (actual coverage)</div>
-          <div className="text-xl font-mono font-semibold text-slate-100">{currentPoint.coverage}% control coverage</div>
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+            <span className="text-xl font-mono font-semibold text-slate-100">{currentPoint.coverage}% control coverage</span>
+            {toleranceSet && (
+              <span className="text-sm text-slate-400">
+                P(loss &gt; tolerance):{" "}
+                <span
+                  className={`font-mono font-semibold ${
+                    withinTolerance(currentPoint.pExceedTolerance) ? "text-emerald-400" : "text-risk"
+                  }`}
+                >
+                  {pctLabel(currentPoint.pExceedTolerance)}
+                </span>
+              </span>
+            )}
+          </div>
           <p className="text-sm text-slate-400 mt-2">
             At today&apos;s real coverage, net benefit is {currencyFull(currentPoint.netBenefit)}/year.{" "}
             {optimalPoint && optimalPoint.coverage !== currentPoint.coverage
@@ -350,12 +453,30 @@ export default function RoiPage() {
       {optimalPoint && costAt100 && (
         <div
           className={`rounded-xl border p-5 mb-6 ${
-            optimalPoint.netBenefit >= 0 ? "border-emerald-500/40 bg-emerald-500/5" : "border-risk/40 bg-risk/5"
+            toleranceSet && !withinTolerance(optimalPoint.pExceedTolerance)
+              ? "border-risk/40 bg-risk/5"
+              : optimalPoint.netBenefit >= 0
+              ? "border-emerald-500/40 bg-emerald-500/5"
+              : "border-risk/40 bg-risk/5"
           }`}
         >
-          <div className="text-xs font-medium text-slate-400 mb-1">Optimal investment point</div>
-          <div className="text-xl font-mono font-semibold text-slate-100">
-            {optimalPoint.coverage}% control coverage
+          <div className="text-xs font-medium text-slate-400 mb-1">
+            Optimal investment point{toleranceSet && !withinTolerance(optimalPoint.pExceedTolerance) ? " (best ROI — still outside risk appetite)" : ""}
+          </div>
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+            <span className="text-xl font-mono font-semibold text-slate-100">{optimalPoint.coverage}% control coverage</span>
+            {toleranceSet && (
+              <span className="text-sm text-slate-400">
+                P(loss &gt; tolerance):{" "}
+                <span
+                  className={`font-mono font-semibold ${
+                    withinTolerance(optimalPoint.pExceedTolerance) ? "text-emerald-400" : "text-risk"
+                  }`}
+                >
+                  {pctLabel(optimalPoint.pExceedTolerance)}
+                </span>
+              </span>
+            )}
           </div>
           <p className="text-sm text-slate-400 mt-2">
             Net benefit peaks here at {currencyFull(optimalPoint.netBenefit)}/year — {currencyFull(optimalPoint.riskAvoided)}{" "}
@@ -372,6 +493,19 @@ export default function RoiPage() {
                   optimalPoint.riskAvoided * 0.6
                 )}+) — that's the range where the model starts weighing cost against risk instead of one obviously winning.`}
           </p>
+        </div>
+      )}
+
+      {exceedanceConfig && (
+        <div className="rounded-xl border border-border bg-surface p-5 mb-6">
+          <h3 className="font-semibold text-slate-100 mb-1">Probability of exceeding risk tolerance, by coverage level</h3>
+          <p className="text-xs text-slate-500 mb-3">
+            The question the board actually asks: at what coverage do we get inside our stated appetite? Where the red
+            curve stays above the green line, no level of control investment gets you there. Amber point is today.
+          </p>
+          <div className={`h-72 transition-opacity ${loading ? "opacity-40" : "opacity-100"}`}>
+            <ChartCanvas config={exceedanceConfig} />
+          </div>
         </div>
       )}
 
