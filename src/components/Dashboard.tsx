@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChartConfiguration } from "chart.js";
 import { ChartCanvas } from "./ChartCanvas";
 import { MultiSelectDropdown } from "./MultiSelectDropdown";
+import { SelectDropdown } from "./SelectDropdown";
 import { interpolateLec, toleranceForTargetProbability } from "@/lib/lec";
 
 interface Scenario {
@@ -512,16 +513,12 @@ export function Dashboard() {
 
       <div className="rounded-xl border border-border bg-surface p-5 mb-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-400">Industry Scenario</span>
-            <select className="select" value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}>
-              {scenarios.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SelectDropdown
+            label="Industry Scenario"
+            options={scenarios.map((s) => ({ id: s.id, label: s.name }))}
+            value={scenarioId}
+            onChange={setScenarioId}
+          />
 
           <MultiSelectDropdown
             label="Threat Types (select any number)"

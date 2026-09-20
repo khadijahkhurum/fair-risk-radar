@@ -7,6 +7,7 @@ import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { UploadCatalogPanel } from "@/components/UploadCatalogPanel";
 import { EvidenceModal } from "@/components/EvidenceModal";
 import type { NormalizedControl } from "@/lib/catalog-parser";
+import { coverageByFramework, averageOfFrameworks } from "@/lib/coverage";
 
 export default function ControlsPage() {
   const [frameworks, setFrameworks] = useState<FrameworkColumn[]>([]);
@@ -85,8 +86,11 @@ export default function ControlsPage() {
     ? uploaded.controls.map((c) => ({ ...c, coveragePct: undefined, coverageSource: undefined }))
     : controls;
 
-  const avgCoverage =
-    controls.length > 0 ? controls.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / controls.length : 0;
+  // Coverage rolls up per framework first, then averages those — see
+  // src/lib/coverage.ts for why equal framework weighting beats a raw
+  // control-level mean.
+  const frameworkCoverage = coverageByFramework(controls, frameworks);
+  const avgCoverage = averageOfFrameworks(frameworkCoverage);
   const sourceCounts = controls.reduce<Record<string, number>>((acc, c) => {
     const src = c.coverageSource ?? "DEMO";
     acc[src] = (acc[src] ?? 0) + 1;
@@ -156,6 +160,51 @@ export default function ControlsPage() {
                 </span>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {!uploaded && controls.length > 0 && (
+        <div className="rounded-xl border border-border bg-surface p-5 mb-6">
+          <div className="flex items-baseline justify-between mb-4">
+            <h3 className="font-semibold text-slate-100">Coverage by framework</h3>
+            <span className="text-xs text-slate-500">
+              Average of the {frameworkCoverage.filter((f) => f.coveragePct !== null).length} scored frameworks ={" "}
+              <span className="font-mono text-slate-300">{avgCoverage.toFixed(0)}%</span>
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+            {frameworkCoverage.map((f) => (
+              <div key={f.id} className="flex items-center gap-3">
+                <span className="text-sm text-slate-300 w-52 shrink-0 truncate" title={f.label}>
+                  {f.label}
+                </span>
+                <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      f.coveragePct === null
+                        ? "bg-slate-600"
+                        : f.coveragePct >= 80
+                        ? "bg-emerald-400"
+                        : f.coveragePct >= 50
+                        ? "bg-amber-400"
+                        : "bg-risk"
+                    }`}
+                    style={{ width: `${f.coveragePct ?? 0}%` }}
+                  />
+                </div>
+                <span
+                  className={`font-mono text-sm tabular-nums w-12 text-right shrink-0 ${
+                    f.coveragePct === null ? "text-slate-600" : "text-slate-200"
+                  }`}
+                >
+                  {f.coveragePct === null ? "—" : `${f.coveragePct.toFixed(0)}%`}
+                </span>
+                <span className="text-[11px] text-slate-500 w-20 shrink-0">
+                  {f.mappedCount} control{f.mappedCount === 1 ? "" : "s"}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
       )}

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { Modal } from "@/components/Modal";
 import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
+import { SelectDropdown } from "@/components/SelectDropdown";
 import { RiskHeatmap, type HeatmapPoint } from "@/components/RiskHeatmap";
 import { riskScoreLabel } from "@/lib/risk-rating";
 
@@ -337,16 +338,12 @@ function NewRiskModal({
           </label>
         </div>
         <div className="grid grid-cols-2 gap-4">
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-400">Scenario</span>
-            <select className="select" value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}>
-              {scenarios.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SelectDropdown
+            label="Scenario"
+            options={scenarios.map((s) => ({ id: s.id, label: s.name }))}
+            value={scenarioId}
+            onChange={setScenarioId}
+          />
           <MultiSelectDropdown
             label="Threats"
             placeholder="Baseline"
