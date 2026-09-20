@@ -58,7 +58,7 @@ interface Run {
   avgControlCoveragePct: number;
 }
 
-const RUN_COLORS = ["#6366f1", "#22d3ee", "#f59e0b", "#10b981"];
+const RUN_COLORS = ["#3454d1", "#0891b2", "#f59e0b", "#10b981"];
 const MAX_RUNS = RUN_COLORS.length;
 const DEFAULT_TOLERANCE_MAX = 20_000_000;
 // Same 10% bar the stat card's red/green accent already uses — kept as one
@@ -169,6 +169,11 @@ export function Dashboard() {
   // will either, so tell the user that up front instead of making them find
   // it by trial and error.
   const [bestCaseFloor, setBestCaseFloor] = useState<number | null>(null);
+  // Cost-Benefit / ROSI (Return on Security Investment) — the FAIR method's
+  // actual purpose: turning "P(loss>tolerance) went from red to green" into
+  // "this control spend pays for itself N times over," which is the
+  // sentence a budget-holder needs, not a probability.
+  const [annualControlCost, setAnnualControlCost] = useState("");
 
   async function loadScenarios() {
     try {
@@ -356,6 +361,16 @@ export function Dashboard() {
 
   const whatIfExceedProbability = whatIfResult?.pExceedTolerance ?? null;
   const whatIfIsGreen = whatIfExceedProbability !== null && whatIfExceedProbability <= TARGET_EXCEED_PROBABILITY;
+
+  // Risk reduction is a mean-ALE delta (dollars/year avoided), not a
+  // probability delta — that's what a cost figure can be compared against.
+  const riskReductionValue =
+    latestRun && whatIfResult ? latestRun.result.meanAle - whatIfResult.meanAle : null;
+  const annualControlCostValue = annualControlCost ? Number(annualControlCost) : null;
+  const rosiPct =
+    riskReductionValue !== null && annualControlCostValue && annualControlCostValue > 0
+      ? ((riskReductionValue - annualControlCostValue) / annualControlCostValue) * 100
+      : null;
 
   const histogramConfig = useMemo<ChartConfiguration<any> | null>(() => {
     if (!latestRun) return null;
@@ -553,7 +568,7 @@ export function Dashboard() {
           <button
             onClick={runSimulation}
             disabled={running || !scenarioId}
-            className="px-4 py-2 rounded-lg bg-gradient-to-r from-accent to-accent2 text-white font-medium text-sm disabled:opacity-50 hover:opacity-90 transition-opacity"
+            className="btn-primary"
           >
             {running ? "Running 8,000 trials…" : "Run Simulation"}
           </button>
@@ -724,6 +739,54 @@ export function Dashboard() {
                 </div>
               </div>
             )}
+            {whatIfOpen && (
+              <div className="mt-4 rounded-lg border border-border p-4">
+                <span className="text-xs font-medium text-slate-400 block mb-3">
+                  Cost-benefit of this control investment (ROSI)
+                </span>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-end">
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-xs text-slate-500">
+                      Estimated annual cost to reach {whatIfCoverage}% coverage (USD)
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={annualControlCost}
+                      onChange={(e) => setAnnualControlCost(e.target.value)}
+                      placeholder="e.g. 150000"
+                      className="select"
+                    />
+                  </label>
+                  <div>
+                    <div className="text-xs text-slate-500 mb-1">Expected annual loss avoided</div>
+                    <div className="text-lg font-semibold tabular-nums text-slate-100">
+                      {riskReductionValue !== null ? currencyFull(Math.max(riskReductionValue, 0)) : "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500 mb-1">Return on security investment</div>
+                    <div
+                      className={`text-lg font-semibold tabular-nums ${
+                        rosiPct === null ? "text-slate-100" : rosiPct >= 0 ? "text-emerald-400" : "text-risk"
+                      }`}
+                    >
+                      {rosiPct !== null ? `${rosiPct >= 0 ? "+" : ""}${rosiPct.toFixed(0)}%` : "Enter a cost"}
+                    </div>
+                  </div>
+                </div>
+                {rosiPct !== null && (
+                  <p className="text-xs text-slate-500 mt-3">
+                    {rosiPct >= 0
+                      ? `For every $1 spent reaching ${whatIfCoverage}% coverage, this avoids ~$${(
+                          1 +
+                          rosiPct / 100
+                        ).toFixed(2)} in expected annual loss — the investment more than pays for itself at this scenario's simulated loss profile.`
+                      : `At this cost, the annual loss avoided doesn't cover the spend — either the cost estimate is high for this scenario's risk, or the coverage target should be lower.`}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -755,7 +818,7 @@ function StatCard({ label, value, accent }: { label: string; value: string; acce
   return (
     <div className="rounded-xl border border-border bg-surface p-4">
       <div className="text-xs text-slate-400 mb-1">{label}</div>
-      <div className={`text-xl font-semibold tabular-nums ${color}`}>
+      <div className={`text-xl font-mono font-semibold tabular-nums ${color}`}>
         {value}
       </div>
     </div>

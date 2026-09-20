@@ -110,7 +110,7 @@ export default function RisksPage() {
         </div>
         <button
           onClick={() => setShowForm(true)}
-          className="shrink-0 px-4 py-2 rounded-lg bg-gradient-to-r from-accent to-accent2 text-white font-medium text-sm hover:opacity-90 transition-opacity"
+          className="btn-primary shrink-0"
         >
           + New Risk
         </button>
@@ -389,7 +389,7 @@ function NewRiskModal({
           <button
             onClick={submit}
             disabled={saving}
-            className="px-4 py-2 rounded-lg bg-gradient-to-r from-accent to-accent2 text-white font-medium text-sm disabled:opacity-50"
+            className="btn-primary"
           >
             {saving ? "Saving…" : "Create Risk"}
           </button>

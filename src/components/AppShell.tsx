@@ -7,6 +7,7 @@ const NAV = [
   { href: "/", label: "Risk Simulator" },
   { href: "/controls", label: "Control Posture" },
   { href: "/risks", label: "Risk Register" },
+  { href: "/roi", label: "ROI Analysis" },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -15,8 +16,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen flex">
       <aside className="hidden lg:flex w-64 flex-col border-r border-border bg-surface px-6 py-8 shrink-0">
-        <div className="flex items-center gap-2 mb-10">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-accent2" />
+        <div className="flex items-center gap-2.5 mb-10">
+          <div className="w-8 h-8 rounded-md border border-accent/50 bg-accent/10 flex items-center justify-center">
+            <span className="font-mono text-xs font-semibold text-accent2">FR</span>
+          </div>
           <span className="font-semibold text-lg tracking-tight">FAIR Risk Radar</span>
         </div>
         <nav className="flex flex-col gap-1 text-sm">

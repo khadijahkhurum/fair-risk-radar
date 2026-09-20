@@ -89,15 +89,18 @@ export default function ControlsPage() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <div className="rounded-xl border border-border bg-surface p-4">
             <div className="text-xs text-slate-400 mb-1">Average Coverage</div>
-            <div className={`text-xl font-semibold tabular-nums ${coverageColor}`}>{avgCoverage.toFixed(0)}%</div>
+            <div className={`text-xl font-mono font-semibold tabular-nums ${coverageColor}`}>{avgCoverage.toFixed(0)}%</div>
           </div>
           <div className="rounded-xl border border-border bg-surface p-4">
             <div className="text-xs text-slate-400 mb-1">Controls Tracked</div>
-            <div className="text-xl font-semibold tabular-nums text-slate-100">{controls.length}</div>
+            <div className="text-xl font-mono font-semibold tabular-nums text-slate-100">{controls.length}</div>
           </div>
           <div className="rounded-xl border border-border bg-surface p-4">
-            <div className="text-xs text-slate-400 mb-1">Frameworks Mapped</div>
-            <div className="text-xl font-semibold tabular-nums text-slate-100">{frameworks.length}</div>
+            <div className="text-xs text-slate-400 mb-1">Frameworks Shown</div>
+            <div className="text-xl font-mono font-semibold tabular-nums text-slate-100">
+              {activeColumns.length}
+              <span className="text-sm text-slate-500 font-normal"> / {frameworks.length}</span>
+            </div>
           </div>
           <div className="rounded-xl border border-border bg-surface p-4">
             <div className="text-xs text-slate-400 mb-1">Coverage Provenance</div>
