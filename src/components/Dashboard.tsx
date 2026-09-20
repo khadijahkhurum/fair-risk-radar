@@ -514,6 +514,7 @@ export function Dashboard() {
           <MultiSelectDropdown
             label="Threat Types (select any number)"
             placeholder="Baseline (no threat modifier)"
+            itemNoun="threats"
             options={threats.map((t) => ({ id: t.id, label: t.name, description: t.description }))}
             selected={threatIds}
             onChange={setThreatIds}
@@ -671,13 +672,19 @@ export function Dashboard() {
                     <div className="flex flex-col gap-1.5">
                       {threats.map((t) => {
                         const included = whatIfThreatIds.includes(t.id);
+                        const isLastOne = included && whatIfThreatIds.length === 1;
                         const withoutIt = perThreatWithoutResult[t.id];
                         const withoutItGreen = withoutIt !== null && withoutIt !== undefined && withoutIt <= TARGET_EXCEED_PROBABILITY;
                         return (
-                          <label key={t.id} className="flex items-center gap-2 text-sm text-slate-300">
+                          <label
+                            key={t.id}
+                            className={`flex items-center gap-2 text-sm ${isLastOne ? "text-slate-500" : "text-slate-300"}`}
+                            title={isLastOne ? "At least one threat has to stay in scope — a zero-threat landscape isn't real." : undefined}
+                          >
                             <input
                               type="checkbox"
                               checked={included}
+                              disabled={isLastOne}
                               onChange={(e) =>
                                 setWhatIfThreatIds((prev) =>
                                   e.target.checked ? [...prev, t.id] : prev.filter((id) => id !== t.id)
@@ -685,7 +692,7 @@ export function Dashboard() {
                               }
                             />
                             <span className="flex-1">{t.name}</span>
-                            {included && withoutIt !== null && withoutIt !== undefined && (
+                            {included && withoutIt !== null && withoutIt !== undefined && !isLastOne && (
                               <span className={`text-[11px] ${withoutItGreen ? "text-emerald-400 font-medium" : "text-slate-500"}`}>
                                 without it: {(withoutIt * 100).toFixed(1)}%{withoutItGreen ? " ✓" : ""}
                               </span>
@@ -708,9 +715,7 @@ export function Dashboard() {
                     {whatIfExceedProbability !== null ? `${(whatIfExceedProbability * 100).toFixed(1)}%` : "—"}
                   </div>
                   <p className="text-xs text-slate-400 mt-2">
-                    {whatIfIsGreen && whatIfThreatIds.length === 0
-                      ? `At ${whatIfCoverage}% control coverage this drops under the ${(TARGET_EXCEED_PROBABILITY * 100).toFixed(0)}% bar — but only because every threat is unticked. No real threat landscape is zero; re-tick at least the threats this scenario actually faces before treating this as a plan.`
-                      : whatIfIsGreen
+                    {whatIfIsGreen
                       ? `At ${whatIfCoverage}% control coverage with ${whatIfThreatIds.length} threat${
                           whatIfThreatIds.length === 1 ? "" : "s"
                         } still in scope, this drops under the ${(TARGET_EXCEED_PROBABILITY * 100).toFixed(0)}% bar — that's the combination to take to the board as the mitigation plan.`

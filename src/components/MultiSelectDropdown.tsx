@@ -17,12 +17,14 @@ export function MultiSelectDropdown({
   selected,
   onChange,
   placeholder,
+  itemNoun = "items",
 }: {
   label: string;
   options: MultiSelectOption[];
   selected: string[];
   onChange: (ids: string[]) => void;
   placeholder: string;
+  itemNoun?: string;
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -46,7 +48,7 @@ export function MultiSelectDropdown({
       ? placeholder
       : selected.length === 1
         ? options.find((o) => o.id === selected[0])?.label ?? placeholder
-        : `${selected.length} threats selected`;
+        : `${selected.length} ${itemNoun} selected`;
 
   return (
     <div className="relative" ref={containerRef}>

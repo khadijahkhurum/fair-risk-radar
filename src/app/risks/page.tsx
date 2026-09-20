@@ -350,6 +350,7 @@ function NewRiskModal({
           <MultiSelectDropdown
             label="Threats"
             placeholder="Baseline"
+            itemNoun="threats"
             options={threats.map((t) => ({ id: t.id, label: t.name }))}
             selected={threatIds}
             onChange={setThreatIds}

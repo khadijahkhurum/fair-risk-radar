@@ -62,6 +62,16 @@ export default function ControlsPage() {
     ? uploaded.controls.map((c) => ({ ...c, coveragePct: undefined, coverageSource: undefined }))
     : controls;
 
+  const avgCoverage =
+    controls.length > 0 ? controls.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / controls.length : 0;
+  const sourceCounts = controls.reduce<Record<string, number>>((acc, c) => {
+    const src = c.coverageSource ?? "DEMO";
+    acc[src] = (acc[src] ?? 0) + 1;
+    return acc;
+  }, {});
+  const coverageColor =
+    avgCoverage >= 80 ? "text-emerald-400" : avgCoverage >= 50 ? "text-amber-400" : "text-risk";
+
   return (
     <AppShell>
       <header className="mb-8">
@@ -75,11 +85,39 @@ export default function ControlsPage() {
         <div className="mb-6 rounded-lg border border-risk/30 bg-risk/10 text-risk px-4 py-3 text-sm">{loadError}</div>
       )}
 
+      {!uploaded && controls.length > 0 && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <div className="rounded-xl border border-border bg-surface p-4">
+            <div className="text-xs text-slate-400 mb-1">Average Coverage</div>
+            <div className={`text-xl font-semibold tabular-nums ${coverageColor}`}>{avgCoverage.toFixed(0)}%</div>
+          </div>
+          <div className="rounded-xl border border-border bg-surface p-4">
+            <div className="text-xs text-slate-400 mb-1">Controls Tracked</div>
+            <div className="text-xl font-semibold tabular-nums text-slate-100">{controls.length}</div>
+          </div>
+          <div className="rounded-xl border border-border bg-surface p-4">
+            <div className="text-xs text-slate-400 mb-1">Frameworks Mapped</div>
+            <div className="text-xl font-semibold tabular-nums text-slate-100">{frameworks.length}</div>
+          </div>
+          <div className="rounded-xl border border-border bg-surface p-4">
+            <div className="text-xs text-slate-400 mb-1">Coverage Provenance</div>
+            <div className="text-xs text-slate-300 mt-1.5 space-x-2">
+              {Object.entries(sourceCounts).map(([src, count]) => (
+                <span key={src}>
+                  <span className="text-slate-100 font-medium">{count}</span> {src}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
         <div className="w-full max-w-sm">
           <MultiSelectDropdown
             label="Compliance Frameworks (select any number)"
             placeholder="Select frameworks"
+            itemNoun="frameworks"
             options={frameworks.map((f) => ({ id: f.id, label: f.label }))}
             selected={frameworkIds}
             onChange={setFrameworkIds}

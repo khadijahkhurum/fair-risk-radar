@@ -1,6 +1,6 @@
 // Audit-evidence export: current control posture + latest risk assessment,
 // as CSV (for a spreadsheet-driven auditor) or PDF (for a signable artifact).
-import { PDFDocument, StandardFonts, rgb, type PDFPage } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, type PDFPage, type PDFFont } from "pdf-lib";
 
 export interface ExportRow {
   controlId: string;
@@ -107,6 +107,26 @@ const MUTED = rgb(0.42, 0.44, 0.5);
 const BORDER = rgb(0.85, 0.86, 0.9);
 const ROW_ALT = rgb(0.965, 0.966, 0.98);
 
+// Greedy word-wrap — pdf-lib has no built-in text flow, and a board member
+// reading a run-on sentence off the page edge is exactly the "not readable"
+// complaint this fixes.
+function wrapText(text: string, maxWidth: number, font: PDFFont, size: number): string[] {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (font.widthOfTextAtSize(candidate, size) > maxWidth && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = candidate;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
 function coverageColor(pct: number) {
   if (pct >= 80) return rgb(0.02, 0.55, 0.36); // green
   if (pct >= 50) return rgb(0.7, 0.5, 0.02); // amber
@@ -199,7 +219,36 @@ export async function buildPdfExport(
 
   if (assessment) {
     page!.drawText(`Scenario: ${assessment.scenarioName}`, { x: MARGIN, y, size: 13, font: bold, color: INK });
-    y -= 22;
+    y -= 24;
+
+    // Plain-language verdict banner — the thing a board member actually
+    // reads. Everything below it (percentile tiles, the control table) is
+    // supporting detail for whoever wants to dig in, not the headline.
+    if (assessment.riskTolerance !== null && assessment.pExceedTolerance !== null) {
+      const breaches = assessment.pExceedTolerance > 0.1;
+      const bannerColor = breaches ? rgb(0.75, 0.16, 0.24) : rgb(0.02, 0.55, 0.36);
+      const bannerBg = breaches ? rgb(0.99, 0.94, 0.94) : rgb(0.93, 0.98, 0.96);
+      const verdict = breaches ? "Exceeds risk tolerance" : "Within risk tolerance";
+      const sentence = `Based on thousands of simulated years, this scenario costs about $${Math.round(
+        assessment.meanAle
+      ).toLocaleString()} a year on average, and has a ${(assessment.pExceedTolerance * 100).toFixed(
+        0
+      )}% chance in any given year of exceeding the board's $${Math.round(
+        assessment.riskTolerance
+      ).toLocaleString()} risk tolerance.`;
+      const sentenceLines = wrapText(sentence, CONTENT_WIDTH - 24, font, 11);
+      const bannerHeight = 34 + sentenceLines.length * 15;
+
+      page!.drawRectangle({ x: MARGIN, y: y - bannerHeight, width: CONTENT_WIDTH, height: bannerHeight, color: bannerBg, borderColor: bannerColor, borderWidth: 1 });
+      page!.drawText(verdict, { x: MARGIN + 12, y: y - 22, size: 15, font: bold, color: bannerColor });
+      sentenceLines.forEach((l, i) => {
+        page!.drawText(l, { x: MARGIN + 12, y: y - 40 - i * 15, size: 11, font, color: INK });
+      });
+      y -= bannerHeight + 20;
+    }
+
+    page!.drawText("Supporting figures", { x: MARGIN, y, size: 10, font: bold, color: MUTED });
+    y -= 16;
 
     const tiles: { label: string; value: string; color?: ReturnType<typeof rgb> }[] = [
       { label: "Mean ALE", value: `$${Math.round(assessment.meanAle).toLocaleString()}` },
@@ -230,21 +279,10 @@ export async function buildPdfExport(
       page!.drawText(tiles[i].label, { x: x + 6, y: tileTop - 14, size: 7, font, color: MUTED });
       page!.drawText(tiles[i].value, { x: x + 6, y: tileTop - 30, size: 11, font: bold, color: tiles[i].color ?? INK });
     }
-    y = tileTop - 40 - 20;
-
-    if (assessment.riskTolerance !== null) {
-      page!.drawText(`Risk tolerance set at $${Math.round(assessment.riskTolerance).toLocaleString()}/year.`, {
-        x: MARGIN,
-        y,
-        size: 8,
-        font,
-        color: MUTED,
-      });
-      y -= 18;
-    }
+    y = tileTop - 40 - 24;
   }
 
-  page!.drawText("Control Posture", { x: MARGIN, y, size: 13, font: bold, color: INK });
+  page!.drawText("Appendix: Control Posture (audit detail)", { x: MARGIN, y, size: 13, font: bold, color: INK });
   y -= 10;
   page!.drawText(`${rows.length} controls, cross-mapped to NIST CSF 2.0, ISO 27001:2022, SOC 2, and PCI DSS v4.0.`, {
     x: MARGIN,
