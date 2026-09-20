@@ -29,6 +29,8 @@ export function EvidenceModal({ controlId, controlName, onClose }: { controlId: 
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is redefined every render;
+    // the real dependency is controlId, and adding `load` here would loop.
   }, [controlId]);
 
   async function handleUpload(file: File) {

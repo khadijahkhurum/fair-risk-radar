@@ -125,7 +125,7 @@ export default function RisksPage() {
         </div>
         {risks.length === 0 ? (
           <p className="text-sm text-slate-500 p-5">
-            No risks tracked yet. Click "+ New Risk" to add the first one.
+            No risks tracked yet. Click &quot;+ New Risk&quot; to add the first one.
           </p>
         ) : (
           <div className="overflow-x-auto">

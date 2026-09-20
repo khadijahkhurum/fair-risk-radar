@@ -581,12 +581,12 @@ export function Dashboard() {
             <p className="text-xs text-slate-400 -mt-3 mb-6">
               {requiredToleranceForGreen !== null ? (
                 <>
-                  At today's threats and control coverage, tolerance would need to be{" "}
+                  At today&apos;s threats and control coverage, tolerance would need to be{" "}
                   <span className="text-emerald-400 font-medium">{currencyFull(requiredToleranceForGreen)}</span> or
                   higher to go green.{" "}
                 </>
               ) : (
-                <>Raising the tolerance alone won't turn this green within the simulated range — </>
+                <>Raising the tolerance alone won&apos;t turn this green within the simulated range — </>
               )}
               <button onClick={() => setWhatIfOpen((v) => !v)} className="text-accent2 underline hover:no-underline">
                 try lowering risk instead
@@ -610,7 +610,7 @@ export function Dashboard() {
                 {bestCaseFloor > TARGET_EXCEED_PROBABILITY ? (
                   <p className="text-xs text-amber-400">
                     Ceiling check: even at 100% control coverage with no threats added, this scenario still exceeds
-                    tolerance {(bestCaseFloor * 100).toFixed(1)}% of the time. Green isn't reachable at{" "}
+                    tolerance {(bestCaseFloor * 100).toFixed(1)}% of the time. Green isn&apos;t reachable at{" "}
                     {currencyFull(toleranceValue ?? 0)} through controls alone — raise the tolerance above, or treat
                     this as a case for risk transfer (insurance) rather than more controls.
                   </p>
@@ -651,7 +651,7 @@ export function Dashboard() {
                   </label>
                   <div className="flex flex-col gap-1.5">
                     <span className="text-xs font-medium text-slate-400">
-                      Threats included — toggle one off, or read "without it" to see its weight
+                      Threats included — toggle one off, or read &quot;without it&quot; to see its weight
                     </span>
                     <div className="flex flex-col gap-1.5">
                       {threats.map((t) => {
