@@ -51,7 +51,9 @@ export function MultiSelectDropdown({
         : `${selected.length} ${itemNoun} selected`;
 
   return (
-    <div className="relative" ref={containerRef}>
+    // Lift the whole control while its menu is open, so the menu clears
+    // sibling cards without relying only on the page-level stacking rule.
+    <div className={`relative ${open ? "z-40" : ""}`} ref={containerRef}>
       <span className="text-xs font-medium text-slate-400 block mb-1.5">{label}</span>
       <button
         type="button"
