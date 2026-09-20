@@ -37,11 +37,21 @@ function IconRoi() {
   );
 }
 
+function IconTransfer() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+      <path d="M12 3l7 3v5.5c0 3.9-2.8 7.2-7 8.5-4.2-1.3-7-4.6-7-8.5V6l7-3z" />
+      <path d="M8.5 12.5h7M12.5 9l3 3.5-3 3.5" />
+    </svg>
+  );
+}
+
 const NAV = [
   { href: "/", label: "Risk Simulator", Icon: IconSimulator },
   { href: "/controls", label: "Control Posture", Icon: IconControls },
   { href: "/risks", label: "Risk Register", Icon: IconRegister },
   { href: "/roi", label: "ROI Analysis", Icon: IconRoi },
+  { href: "/transfer", label: "Risk Transfer", Icon: IconTransfer },
 ];
 
 const STORAGE_KEY = "frr-sidebar-open";
