@@ -8,8 +8,17 @@ import type { ControlRow, FrameworkColumn } from "@/components/ControlTable";
 export interface FrameworkCoverage {
   id: string;
   label: string;
+  field: FrameworkColumn["field"];
   mappedCount: number;
   coveragePct: number | null; // null when no control maps to this framework
+}
+
+// One definition of "this control maps to this framework", used by both the
+// roll-up and the per-framework bulk setter so they can't disagree about
+// which controls belong to a framework.
+export function mapsToFramework(control: ControlRow, field: FrameworkColumn["field"]): boolean {
+  const cell = control[field];
+  return cell !== undefined && cell !== null && String(cell).trim() !== "" && String(cell) !== "N/A";
 }
 
 export function coverageByFramework(
@@ -17,13 +26,11 @@ export function coverageByFramework(
   frameworks: readonly FrameworkColumn[]
 ): FrameworkCoverage[] {
   return frameworks.map((f) => {
-    const mapped = controls.filter((c) => {
-      const cell = c[f.field];
-      return cell !== undefined && cell !== null && String(cell).trim() !== "" && String(cell) !== "N/A";
-    });
+    const mapped = controls.filter((c) => mapsToFramework(c, f.field));
     return {
       id: f.id,
       label: f.label,
+      field: f.field,
       mappedCount: mapped.length,
       coveragePct:
         mapped.length > 0 ? mapped.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / mapped.length : null,

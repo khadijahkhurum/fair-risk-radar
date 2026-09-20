@@ -7,7 +7,7 @@ import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { UploadCatalogPanel } from "@/components/UploadCatalogPanel";
 import { EvidenceModal } from "@/components/EvidenceModal";
 import type { NormalizedControl } from "@/lib/catalog-parser";
-import { coverageByFramework, averageOfFrameworks } from "@/lib/coverage";
+import { coverageByFramework, averageOfFrameworks, mapsToFramework } from "@/lib/coverage";
 
 export default function ControlsPage() {
   const [frameworks, setFrameworks] = useState<FrameworkColumn[]>([]);
@@ -26,6 +26,11 @@ export default function ControlsPage() {
   // time to move the headline number is too slow for a live demo.
   const [bulkPct, setBulkPct] = useState("");
   const [applyingBulk, setApplyingBulk] = useState(false);
+  // While a framework slider is being dragged we show the dragged value
+  // locally and only write on release — otherwise every pixel of drag fires a
+  // round of PATCHes.
+  const [draftFw, setDraftFw] = useState<Record<string, number>>({});
+  const [savingFw, setSavingFw] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -71,6 +76,26 @@ export default function ControlsPage() {
     }
   }
 
+  // Set every control mapped to this framework to the same coverage.
+  async function applyFrameworkCoverage(fwId: string, pct: number) {
+    const fw = frameworks.find((f) => f.id === fwId);
+    if (!fw) return;
+    const mapped = controls.filter((c) => mapsToFramework(c, fw.field));
+    if (mapped.length === 0) return;
+    setSavingFw(fwId);
+    try {
+      await Promise.all(mapped.map((c) => patchCoverage(c.id, pct)));
+      await load();
+    } finally {
+      setSavingFw(null);
+      setDraftFw((d) => {
+        const next = { ...d };
+        delete next[fwId];
+        return next;
+      });
+    }
+  }
+
   async function syncAws() {
     setSyncing(true);
     try {
@@ -90,7 +115,14 @@ export default function ControlsPage() {
   // src/lib/coverage.ts for why equal framework weighting beats a raw
   // control-level mean.
   const frameworkCoverage = coverageByFramework(controls, frameworks);
-  const avgCoverage = averageOfFrameworks(frameworkCoverage);
+  // Headline average covers only the frameworks currently selected in the
+  // picker — "our NIST + ISO posture" is a different number from "our posture
+  // across all six", and the tile should answer whichever one is on screen.
+  // With nothing selected there's no meaningful subset, so fall back to all.
+  const scoredFrameworks = frameworkCoverage.filter((f) => f.coveragePct !== null);
+  const countedFrameworks =
+    frameworkIds.length > 0 ? scoredFrameworks.filter((f) => frameworkIds.includes(f.id)) : scoredFrameworks;
+  const avgCoverage = averageOfFrameworks(countedFrameworks);
   const sourceCounts = controls.reduce<Record<string, number>>((acc, c) => {
     const src = c.coverageSource ?? "DEMO";
     acc[src] = (acc[src] ?? 0) + 1;
@@ -166,46 +198,69 @@ export default function ControlsPage() {
 
       {!uploaded && controls.length > 0 && (
         <div className="rounded-xl border border-border bg-surface p-5 mb-6">
-          <div className="flex items-baseline justify-between mb-4">
+          <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
             <h3 className="font-semibold text-slate-100">Coverage by framework</h3>
             <span className="text-xs text-slate-500">
-              Average of the {frameworkCoverage.filter((f) => f.coveragePct !== null).length} scored frameworks ={" "}
+              Average of the {countedFrameworks.length}{" "}
+              {frameworkIds.length > 0 ? "selected" : "scored"} framework
+              {countedFrameworks.length === 1 ? "" : "s"} ={" "}
               <span className="font-mono text-slate-300">{avgCoverage.toFixed(0)}%</span>
             </span>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
-            {frameworkCoverage.map((f) => (
-              <div key={f.id} className="flex items-center gap-3">
-                <span className="text-sm text-slate-300 w-52 shrink-0 truncate" title={f.label}>
-                  {f.label}
-                </span>
-                <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all duration-500 ${
-                      f.coveragePct === null
-                        ? "bg-slate-600"
-                        : f.coveragePct >= 80
-                        ? "bg-emerald-400"
-                        : f.coveragePct >= 50
-                        ? "bg-amber-400"
-                        : "bg-risk"
-                    }`}
-                    style={{ width: `${f.coveragePct ?? 0}%` }}
+          <p className="text-[11px] text-slate-500 mb-4">
+            Drag a slider to set every control mapped to that framework at once. Controls are cross-mapped, so moving
+            one framework moves the others that share those controls — that overlap is the point of a single control
+            catalogue.
+          </p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-4">
+            {frameworkCoverage.map((f) => {
+              const counted = frameworkIds.length === 0 || frameworkIds.includes(f.id);
+              const live = draftFw[f.id] ?? f.coveragePct ?? 0;
+              const disabled = f.coveragePct === null || savingFw !== null || !!uploaded;
+              return (
+                <div key={f.id} className={counted ? "" : "opacity-45"}>
+                  <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                    <span className="text-sm text-slate-300 truncate" title={f.label}>
+                      {f.label}
+                      {!counted && <span className="text-[10px] text-slate-600 ml-1.5">not counted</span>}
+                    </span>
+                    <span className="flex items-baseline gap-2 shrink-0">
+                      <span
+                        className={`font-mono text-sm tabular-nums ${
+                          f.coveragePct === null
+                            ? "text-slate-600"
+                            : live >= 80
+                            ? "text-emerald-400"
+                            : live >= 50
+                            ? "text-amber-400"
+                            : "text-risk"
+                        }`}
+                      >
+                        {f.coveragePct === null ? "—" : `${Math.round(live)}%`}
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        {f.mappedCount} control{f.mappedCount === 1 ? "" : "s"}
+                      </span>
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={live}
+                    disabled={disabled}
+                    aria-label={`${f.label} coverage`}
+                    onChange={(e) => setDraftFw((d) => ({ ...d, [f.id]: Number(e.target.value) }))}
+                    onPointerUp={(e) => applyFrameworkCoverage(f.id, Number((e.target as HTMLInputElement).value))}
+                    onKeyUp={(e) => applyFrameworkCoverage(f.id, Number((e.target as HTMLInputElement).value))}
+                    className="w-full disabled:opacity-40"
                   />
                 </div>
-                <span
-                  className={`font-mono text-sm tabular-nums w-12 text-right shrink-0 ${
-                    f.coveragePct === null ? "text-slate-600" : "text-slate-200"
-                  }`}
-                >
-                  {f.coveragePct === null ? "—" : `${f.coveragePct.toFixed(0)}%`}
-                </span>
-                <span className="text-[11px] text-slate-500 w-20 shrink-0">
-                  {f.mappedCount} control{f.mappedCount === 1 ? "" : "s"}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
+          {savingFw && <div className="text-[11px] text-slate-500 mt-3">Saving coverage…</div>}
         </div>
       )}
 
