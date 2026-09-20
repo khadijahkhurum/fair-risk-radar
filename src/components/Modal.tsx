@@ -29,9 +29,9 @@ export function Modal({
       }}
     >
       <div
-        className={`w-full ${wide ? "max-w-2xl" : "max-w-md"} max-h-[85vh] overflow-y-auto rounded-xl border border-border bg-surface shadow-2xl`}
+        className={`w-full ${wide ? "max-w-2xl" : "max-w-md"} max-h-[85vh] overflow-y-auto rounded-2xl border border-border glass-thick`}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border sticky top-0 bg-surface">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border sticky top-0 glass-thick">
           <h3 className="font-semibold text-slate-100">{title}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-100 text-lg leading-none">
             ✕

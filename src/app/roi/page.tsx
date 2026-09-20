@@ -212,7 +212,7 @@ export default function RoiPage() {
             label: "Expected Annual Loss",
             data: curve.map((p) => p.meanAle),
             borderColor: "#ff453a",
-            backgroundColor: "#ff453a22",
+            backgroundColor: "rgba(255,69,58,0.20)",
             pointBackgroundColor: pointStyle("#ff453a"),
             pointRadius: pointSize,
             tension: 0.25,
@@ -281,6 +281,11 @@ export default function RoiPage() {
 
   const exceedanceConfig: ChartConfiguration<"line"> | null = useMemo(() => {
     if (curve.length === 0 || !toleranceSet) return null;
+    // Between entering a tolerance and the debounced sweep finishing, `curve`
+    // still holds the previous run — whose pExceedTolerance is all null.
+    // Rendering that draws an empty chart with just the appetite line, which
+    // looks broken. Wait for real data instead.
+    if (curve.every((p) => p.pExceedTolerance === null)) return null;
     return {
       type: "line",
       data: {
@@ -290,7 +295,7 @@ export default function RoiPage() {
             label: "P(annual loss > tolerance)",
             data: curve.map((p) => (p.pExceedTolerance === null ? null : p.pExceedTolerance * 100)),
             borderColor: "#ff453a",
-            backgroundColor: "#ff453a22",
+            backgroundColor: "rgba(255,69,58,0.20)",
             pointBackgroundColor: curve.map((p) => (p.coverage === currentCoveragePct ? "#ff9f0a" : "#ff453a")),
             pointRadius: curve.map((p) => (p.coverage === currentCoveragePct ? 6 : 3)),
             tension: 0.25,

@@ -533,11 +533,13 @@ export function Dashboard() {
           />
 
           <div className="flex flex-col gap-1.5">
-            <div className="flex items-center justify-between">
-              <span id="risk-tolerance-label" className="text-xs font-medium text-slate-400">
-                Risk Tolerance (annual, USD) — drag or type
+            <div className="flex items-center justify-between gap-3">
+              <span id="risk-tolerance-label" className="text-xs font-medium text-slate-400 truncate">
+                Risk Tolerance (annual, USD)
               </span>
-              <span className={`text-[11px] font-medium ${TOLERANCE_BAND_TEXT[toleranceBand]}`}>
+              <span
+                className={`text-[11px] font-medium whitespace-nowrap shrink-0 ${TOLERANCE_BAND_TEXT[toleranceBand]}`}
+              >
                 {TOLERANCE_BAND_LABEL[toleranceBand]}
               </span>
             </div>

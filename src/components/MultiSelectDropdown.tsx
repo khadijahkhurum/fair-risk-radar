@@ -62,11 +62,11 @@ export function MultiSelectDropdown({
         <span className="text-slate-500 ml-2">{open ? "▲" : "▼"}</span>
       </button>
       {open && (
-        <div className="absolute z-10 mt-1 w-full max-h-72 overflow-y-auto rounded-lg border border-border bg-surface2 shadow-xl">
+        <div className="absolute z-30 mt-1 w-full max-h-72 overflow-y-auto rounded-lg border border-border glass-thick">
           {options.map((opt) => (
             <label
               key={opt.id}
-              className="flex items-start gap-2.5 px-3 py-2.5 hover:bg-surface cursor-pointer border-b border-border/60 last:border-0"
+              className="flex items-start gap-2.5 px-3 py-2.5 hover:bg-white/[0.07] cursor-pointer border-b border-border/60 last:border-0"
             >
               <input
                 type="checkbox"
