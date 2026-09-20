@@ -99,7 +99,7 @@ export function EvidenceModal({
           <p className="text-sm text-slate-400 mb-1">No evidence attached yet.</p>
           <p className="text-xs text-slate-500 max-w-sm mx-auto">
             Attach the artifact an auditor would ask for — an access-review export, a patch-compliance report, or an
-            incident-response test log — as a .csv or .txt file. It's parsed and stored here permanently, building an
+            incident-response test log — as a .csv or .txt file. It&apos;s parsed and stored here permanently, building an
             audit trail over time.
           </p>
         </div>
