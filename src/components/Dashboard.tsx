@@ -61,6 +61,15 @@ interface Run {
 const RUN_COLORS = ["#3454d1", "#0891b2", "#f59e0b", "#10b981"];
 const MAX_RUNS = RUN_COLORS.length;
 const DEFAULT_TOLERANCE_MAX = 20_000_000;
+// Upper bound on a typed/pasted tolerance — blocks garbage like a pasted
+// 20-digit number from ever reaching state, let alone the simulation.
+const MAX_TOLERANCE = 1_000_000_000_000; // $1T/year — already absurd for any scenario here
+// The slider's own step size before a real run exists (matches the range
+// input's step formula below at max=DEFAULT_TOLERANCE_MAX) — used to round
+// the seeded tolerance onto a value the slider can actually represent, so
+// the number box and slider thumb agree from the very first paint instead
+// of the browser silently snapping the thumb to a different number.
+const DEFAULT_TOLERANCE_STEP = Math.max(1, Math.round(DEFAULT_TOLERANCE_MAX / 500));
 // Same 10% bar the stat card's red/green accent already uses — kept as one
 // constant so the "required tolerance" readout and the what-if panel agree.
 const TARGET_EXCEED_PROBABILITY = 0.1;
@@ -129,8 +138,23 @@ function interpolateLec(lec: LecPoint[], x: number): number | null {
 // still exceeds the target (would need a materially different risk posture,
 // not just a bigger tolerance number).
 function toleranceForTargetProbability(lec: LecPoint[], target: number): number | null {
-  for (const point of lec) {
-    if (point.probability <= target) return point.loss;
+  if (lec.length === 0) return null;
+  if (lec[0].probability <= target) return lec[0].loss;
+  // Interpolate between the bracketing grid points — the exact inverse of
+  // interpolateLec above. Returning a raw grid point's loss (as this used
+  // to) overstated the tolerance needed by up to half a grid step, and
+  // disagreed with the live (interpolated) P(loss > tolerance) reading by
+  // the same amount — the two numbers must share one interpolation method
+  // or "required tolerance to go green" and "is it green yet" can and did
+  // contradict each other right at the boundary.
+  for (let i = 0; i < lec.length - 1; i++) {
+    const a = lec[i];
+    const b = lec[i + 1];
+    if (a.probability >= target && b.probability <= target) {
+      if (a.probability === b.probability) return a.loss;
+      const t = (a.probability - target) / (a.probability - b.probability);
+      return a.loss + t * (b.loss - a.loss);
+    }
   }
   return null;
 }
@@ -186,7 +210,8 @@ export function Dashboard() {
         setScenarioId((prev) => prev || data.scenarios[0].id);
         const s0 = data.scenarios[0];
         const typicalLoss = s0.primaryLossMode + s0.secondaryLossProbability * s0.secondaryLossMode;
-        setRiskTolerance((prev) => prev || String(Math.round(typicalLoss)));
+        const seeded = Math.round(typicalLoss / DEFAULT_TOLERANCE_STEP) * DEFAULT_TOLERANCE_STEP;
+        setRiskTolerance((prev) => prev || String(seeded));
       }
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Failed to load dashboard data");
@@ -246,6 +271,19 @@ export function Dashboard() {
     } finally {
       setRunning(false);
     }
+  }
+
+  // Single entry point for both the slider and the number box: rejects
+  // non-numeric input (keeps the previous value instead), and clamps to
+  // [0, MAX_TOLERANCE] — a pasted negative or absurdly large number can no
+  // longer reach state, let alone the simulation, silently.
+  function handleToleranceChange(raw: string) {
+    setRiskTolerance((prev) => {
+      if (raw === "") return "";
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return prev;
+      return String(Math.min(Math.max(Math.round(n), 0), MAX_TOLERANCE));
+    });
   }
 
   const selectedScenario = scenarios.find((s) => s.id === scenarioId);
@@ -537,7 +575,7 @@ export function Dashboard() {
 
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-slate-400">
+              <span id="risk-tolerance-label" className="text-xs font-medium text-slate-400">
                 Risk Tolerance (annual, USD) — drag or type
               </span>
               <span className={`text-[11px] font-medium ${TOLERANCE_BAND_TEXT[toleranceBand]}`}>
@@ -546,18 +584,21 @@ export function Dashboard() {
             </div>
             <input
               type="range"
+              aria-labelledby="risk-tolerance-label"
               min={0}
               max={toleranceSliderMax}
               step={Math.max(1, Math.round(toleranceSliderMax / 500))}
               value={toleranceValue ?? 0}
-              onChange={(e) => setRiskTolerance(e.target.value)}
+              onChange={(e) => handleToleranceChange(e.target.value)}
               className="w-full accent-accent"
             />
             <input
               type="number"
+              aria-labelledby="risk-tolerance-label"
               min={0}
+              max={MAX_TOLERANCE}
               value={riskTolerance}
-              onChange={(e) => setRiskTolerance(e.target.value)}
+              onChange={(e) => handleToleranceChange(e.target.value)}
               placeholder="e.g. 5000000"
               className={`select border-2 ${TOLERANCE_BAND_BORDER[toleranceBand]}`}
             />
@@ -581,7 +622,7 @@ export function Dashboard() {
               }}
               className="text-sm text-slate-400 hover:text-slate-200"
             >
-              Clear comparison ({runs.length})
+              {runs.length > 1 ? `Clear comparison (${runs.length})` : "Clear run"}
             </button>
           )}
         </div>
@@ -595,7 +636,7 @@ export function Dashboard() {
             <StatCard label="P90 ALE" value={currencyFull(latestRun.result.p90Ale)} />
             <StatCard
               label="P(loss > tolerance)"
-              value={liveExceedProbability !== null ? `${(liveExceedProbability * 100).toFixed(1)}%` : "—"}
+              value={liveExceedProbability !== null ? `${(liveExceedProbability * 100).toFixed(2)}%` : "—"}
               accent={
                 liveExceedProbability === null
                   ? undefined
@@ -618,7 +659,7 @@ export function Dashboard() {
                 <>Raising the tolerance alone won&apos;t turn this green within the simulated range — </>
               )}
               <button onClick={() => setWhatIfOpen((v) => !v)} className="text-accent2 underline hover:no-underline">
-                try lowering risk instead
+                Try lowering risk instead
               </button>
               .
             </p>
@@ -639,7 +680,7 @@ export function Dashboard() {
                 {bestCaseFloor > TARGET_EXCEED_PROBABILITY ? (
                   <p className="text-xs text-amber-400">
                     Ceiling check: even at 100% control coverage, keeping today&apos;s full threat set in scope, this
-                    scenario still exceeds tolerance {(bestCaseFloor * 100).toFixed(1)}% of the time. Green
+                    scenario still exceeds tolerance {(bestCaseFloor * 100).toFixed(2)}% of the time. Green
                     isn&apos;t achievable at {currencyFull(toleranceValue ?? 0)} through control investment alone —
                     raise the tolerance to a realistic level, or treat the remainder as a case for risk transfer
                     (insurance) rather than more controls.
@@ -648,7 +689,7 @@ export function Dashboard() {
                   <p className="text-xs text-slate-400">
                     Ceiling check: at 100% control coverage, keeping today&apos;s full threat set in scope, this
                     scenario drops to{" "}
-                    <span className="text-emerald-400 font-medium">{(bestCaseFloor * 100).toFixed(1)}%</span> — green
+                    <span className="text-emerald-400 font-medium">{(bestCaseFloor * 100).toFixed(2)}%</span> — green
                     is achievable through control investment alone, without pretending any threat away.{" "}
                     <button
                       onClick={() => {
@@ -709,7 +750,7 @@ export function Dashboard() {
                             <span className="flex-1">{t.name}</span>
                             {included && withoutIt !== null && withoutIt !== undefined && !isLastOne && (
                               <span className={`text-[11px] ${withoutItGreen ? "text-emerald-400 font-medium" : "text-slate-500"}`}>
-                                without it: {(withoutIt * 100).toFixed(1)}%{withoutItGreen ? " ✓" : ""}
+                                without it: {(withoutIt * 100).toFixed(2)}%{withoutItGreen ? " ✓" : ""}
                               </span>
                             )}
                           </label>
@@ -727,14 +768,14 @@ export function Dashboard() {
                     P(loss &gt; tolerance) at these settings{whatIfLoading ? " (recalculating…)" : ""}
                   </div>
                   <div className={`text-2xl font-semibold tabular-nums ${whatIfIsGreen ? "text-emerald-400" : "text-risk"}`}>
-                    {whatIfExceedProbability !== null ? `${(whatIfExceedProbability * 100).toFixed(1)}%` : "—"}
+                    {whatIfExceedProbability !== null ? `${(whatIfExceedProbability * 100).toFixed(2)}%` : "—"}
                   </div>
                   <p className="text-xs text-slate-400 mt-2">
                     {whatIfIsGreen
                       ? `At ${whatIfCoverage}% control coverage with ${whatIfThreatIds.length} threat${
                           whatIfThreatIds.length === 1 ? "" : "s"
                         } still in scope, this drops under the ${(TARGET_EXCEED_PROBABILITY * 100).toFixed(0)}% bar — that's the combination to take to the board as the mitigation plan.`
-                      : `vs. ${liveExceedProbability !== null ? `${(liveExceedProbability * 100).toFixed(1)}%` : "—"} today. Drag coverage up to see what it takes to go green — dropping a threat only tells you its weight, it isn't a real mitigation.`}
+                      : `vs. ${liveExceedProbability !== null ? `${(liveExceedProbability * 100).toFixed(2)}%` : "—"} today. Drag coverage up to see what it takes to go green — dropping a threat only tells you its weight, it isn't a real mitigation.`}
                   </p>
                 </div>
               </div>
