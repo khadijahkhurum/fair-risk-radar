@@ -190,6 +190,13 @@ export default function RoiPage() {
   // the model's "optimum" collapses to spending nothing — which is a signal
   // about the cost input, not real advice.
   const maxAvoidable = fullCoveragePoint?.riskAvoided ?? null;
+  // The lowest coverage level that actually gets inside the appetite bar.
+  // "Reachable at 100%" and "red at today's 75%" are both true and read as a
+  // contradiction side by side — this is the number that reconciles them.
+  const minGreenCoverage = useMemo(() => {
+    const hit = curve.find((p) => p.pExceedTolerance !== null && p.pExceedTolerance <= TARGET_EXCEED_PROBABILITY);
+    return hit ? hit.coverage : null;
+  }, [curve]);
   const toleranceUnreachable =
     toleranceSet && ceilingExceedance !== null && ceilingExceedance > TARGET_EXCEED_PROBABILITY;
   // If controls can't get there, the actionable answer isn't "spend more" —
@@ -469,6 +476,26 @@ export default function RoiPage() {
                   ceilingExceedance
                 )} of the time — inside the ${(TARGET_EXCEED_PROBABILITY * 100).toFixed(0)}% bar.`}
           </span>
+          {!toleranceUnreachable && minGreenCoverage !== null && (
+            <div className="mt-2 text-slate-300">
+              {currentCoveragePct !== null && minGreenCoverage > currentCoveragePct ? (
+                <>
+                  <span className="text-slate-400">But not yet: </span>
+                  you need at least{" "}
+                  <span className="font-mono font-semibold text-slate-100">{minGreenCoverage}%</span> coverage to get
+                  inside the bar, and you are at{" "}
+                  <span className="font-mono font-semibold text-amber-400">{currentCoveragePct}%</span> today — which is
+                  why the panel below is red.
+                </>
+              ) : (
+                <>
+                  <span className="text-slate-400">Already there: </span>
+                  <span className="font-mono font-semibold text-emerald-400">{minGreenCoverage}%</span> coverage is
+                  enough, and today&apos;s posture clears it.
+                </>
+              )}
+            </div>
+          )}
           {toleranceUnreachable && requiredTolerance !== null && (
             <div className="mt-3 pt-3 border-t border-white/10 text-slate-300">
               <span className="text-slate-400">Tolerance that would be green at 100% coverage: </span>
