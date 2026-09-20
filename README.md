@@ -1,99 +1,141 @@
 # FAIR Risk Radar
 
-A quantitative cyber risk platform, not a slider demo. It models expected annual
-loss using the Open Group's FAIR (Factor Analysis of Information Risk) ontology,
-runs the simulation server-side, persists every result to Postgres as an audit
-trail, and can pull real control-compliance data from AWS Config instead of
-manual input.
+**Most risk registers say "High." Nobody can budget against "High."**
 
-## Problem statement
+A quantitative cyber risk platform that answers the question executives
+actually ask — *how much, and is fixing it worth it?* — using Monte Carlo
+simulation on the FAIR model, a control catalogue cross-mapped to six
+compliance frameworks, and an append-only audit trail.
 
-Most portfolio "risk dashboards" are a static page with sliders that reset on
-refresh — nothing persists, nothing is auditable, and nothing talks to a real
-system. This project is the version a GRC or security-engineering team could
-actually adopt as a starting point: a control catalog defined as code, a risk
-register that keeps history, and a path from "control coverage" to "what a
-cloud API actually reports" instead of a number picked by hand.
+---
 
-## Target standards
+## The problem
 
-Every control in the catalog is cross-mapped to six frameworks, selectable
-from a dropdown on the dashboard:
+Qualitative risk management produces adjectives. A risk is "High", a control
+is "Amber", and a heat map turns that into colour. Those labels cannot be
+summed, cannot be compared against a budget, and cannot tell you whether a
+control investment is worth making.
 
-- **NIST CSF 2.0**
-- **ISO/IEC 27001:2022** (Annex A)
-- **SOC 2** (Trust Services Criteria)
-- **PCI DSS v4.0**
-- **EU AI Act**
-- **OWASP LLM Top 10**
+FAIR (Factor Analysis of Information Risk) replaces the adjectives with
+distributions. Instead of "High", you get:
 
-Mappings to the AI-specific frameworks are marked `N/A` on controls with no
-genuine hook into them (e.g. key rotation has no EU AI Act mapping) — a
-forced mapping is worse than an honest gap.
+> *A 90th-percentile year costs $14.2M, and we breach our $5M appetite 32% of
+> the time. Getting inside that appetite needs 91% control coverage; we are at
+> 74%. Closing the gap costs $2.1M/year more than the economically optimal
+> spend — that is the price of the appetite itself.*
 
-See `controls/catalog.yaml` — that file is the single source of truth; the
-database mirrors it. You can also upload your own catalog (`.yaml` or
-`.csv`) from the dashboard to preview it mapped against all six frameworks —
-parsed server-side, held in the browser for that session only, never written
-to the shared database (this is a single-tenant public demo).
+That is a sentence a board can act on.
 
-## Core features & tech stack
+---
 
-| Feature | Implementation |
-|---|---|
-| FAIR Monte Carlo engine | `src/lib/fair.ts` — triangular-distribution sampling, Poisson event counts, 8,000 trials, run server-side in a Next.js Route Handler |
-| Persistent risk register | Postgres via Prisma (`prisma/schema.prisma`) — every simulation run is written as an immutable `RiskAssessment` row |
-| Compliance-as-code | `controls/catalog.yaml` → seeded into the `Control` table (`prisma/seed.ts`) |
-| Live cloud integration | `src/lib/aws-config.ts` calls AWS Config's `GetComplianceDetailsByConfigRule` and computes real per-control coverage %, with a labeled demo fallback when no AWS credentials are set |
-| Audit evidence export | `src/lib/report.ts` — CSV and PDF export of the current control posture + latest assessment, via `pdf-lib` |
-| Threat modeling | `src/lib/threats.ts` — 5 threat types (phishing/BEC, ransomware, cloud misconfiguration, insider, supply chain) that modify an industry scenario's baseline frequency/vulnerability |
-| Multi-framework mapping | `src/lib/frameworks.ts` + `controls/catalog.yaml` — 6 frameworks selectable from the dashboard dropdown |
-| Bring-your-own catalog | `src/lib/catalog-parser.ts` + `src/app/api/controls/upload` — upload a `.yaml`/`.csv` catalog, parsed and validated server-side, previewed client-side only |
-| Interactive risk visualization | Loss distribution histogram, Loss Exceedance Curve (LEC) with a user-set risk-tolerance threshold highlighted, and a mean-ALE trend chart over the audit trail — all Chart.js, no charting framework added |
-| Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS, Chart.js |
+## What it does
 
-Stack: **Next.js · TypeScript · Tailwind CSS · PostgreSQL (Prisma) · AWS SDK v3 · Chart.js · pdf-lib**
+Seven pages, one chain of reasoning:
 
-## GRC technical highlights
+| Page | The question it answers |
+| --- | --- |
+| **Risk Simulator** | How bad is a bad year? 8,000 simulated years → loss distribution, percentiles, exceedance curve |
+| **Control Posture** | What do we actually have in place, cross-mapped to which frameworks, and who says so? |
+| **Risk Register** | What are we formally tracking, who owns it, inherent vs. residual? |
+| **ROI Analysis** | Where does control spend stop paying for itself — and how much does our appetite cost on top of that? |
+| **Risk Transfer** | If controls mathematically cannot get us inside appetite, what does insurance cost? |
+| **Audit Trail** | Prove none of this was invented this morning |
+| **Methodology** | The model, the constants, and an honest list of what it gets wrong |
 
-- **Sourced vs. modeled, labeled everywhere.** Loss magnitude is calibrated to
-  IBM's 2025 Cost of a Data Breach Report; Threat Event Frequency and the
-  Vulnerability baseline are explicit modeling assumptions. The UI tags each
-  factor `sourced` or `modeled` — nothing pretends to be data it isn't.
-- **A real audit trail.** `RiskAssessment` rows are never overwritten. You can
-  answer "what did we think our exposure was last quarter, under what control
-  posture" — the actual question a GRC program needs to answer.
-- **Control coverage has provenance.** Every `ControlCoverage` row is tagged
-  `manual`, `aws-config`, or `demo`. A number on the dashboard always tells you
-  where it came from.
-- **Compliance-as-code, not a hardcoded UI string.** Change a framework mapping
-  in `controls/catalog.yaml`, re-run the seed script, and it propagates through
-  the API, the dashboard, and the exported reports.
+The point isn't any single page — it's that they form a complete risk
+management cycle: **simulate → discover you are outside appetite → find the
+cheapest coverage that fixes it → discover controls alone cannot → price the
+transfer → and log every step.**
 
-## Portfolio impact
+### Other capabilities
 
-This demonstrates full-stack ownership of a GRC tool end to end: a defensible
-quantitative model, a real persistence layer with an audit trail, a live
-integration against an actual cloud compliance API, and an exportable
-artifact an auditor could actually read — not just a chart.
+- **Live what-if panel** — drag control coverage and toggle threats, re-simulated on every change
+- **Per-framework coverage sliders** with cross-mapping made explicit
+- **Evidence viewer** — attach and parse CSV evidence per control, provenance-tagged
+- **AWS Config integration** — pull real control coverage from Config rule evaluations
+- **Custom catalogue upload** — bring your own controls via CSV
+- **Board-ready exports** — PDF leading with a plain-language verdict, technical detail in an appendix; CSV for the working
+- **Installable** — ships a web manifest, so it runs standalone from a phone home screen
 
-## Scope tiers
+---
 
-**MVP (this repo, as built)**
-Single-tenant, one risk register per industry scenario, manual + AWS Config
-control sync, CSV/PDF export, full assessment history.
+## Three decisions worth defending
 
-**Intermediate (natural next step)**
-Auth (NextAuth) with role-based access (control owner vs. auditor read-only),
-multi-tenant organizations, scheduled AWS Config sync via a cron route,
-Slack/email alerting when expected annual loss crosses tolerance.
+The interesting part of a risk model is not the code. It is the modelling
+choices, and why they were made:
 
-**Advanced**
-Additional connectors (GCP Security Command Center, Azure Policy, a GitHub
-Actions-based CI check that fails a PR if a control's mapped coverage drops),
-a proper Beta-PERT sampler in place of the triangular approximation, and a
-policy-as-code layer (OPA/Rego) that turns control coverage thresholds into
-enforceable gates.
+**1. Control effectiveness is capped at a 70% risk reduction.**
+Coverage reduces vulnerability linearly, but never to zero. Perfectly
+implemented controls still fail — fully patched estates get hit by zero-days,
+trained staff still get phished. A model that lets coverage drive risk to zero
+produces a business case for infinite security spend, which is precisely how
+quantitative risk loses credibility in a boardroom.
+
+**2. Control cost scales with the square of coverage, not linearly.**
+Early coverage is cheap and high-leverage; closing the last gap costs
+disproportionately more. This is a *shape*, not a sourced budget curve — but
+the shape is load-bearing. A linear cost curve against a roughly linear
+risk-reduction curve can only ever optimise at 0% or 100%, never in between.
+That is a degenerate result, not a trade-off. Convex cost is what makes an
+interior optimum expressible at all. The optimum sits at `c* = A / 2C`, where
+`A` is avoided loss at full coverage and `C` the full-remediation estimate.
+
+**3. Economic optimum and compliance minimum are different answers.**
+"Where does spend stop paying for itself" and "what does our stated appetite
+demand" are two different questions and routinely disagree. The gap between
+them has a dollar value, and the tool puts it on screen rather than collapsing
+both into one recommendation.
+
+Loss magnitude also follows FAIR's real taxonomy — **Primary Loss** (certain,
+once a loss event occurs) plus a **Secondary Loss** that only materialises a
+fraction of the time — rather than a single flat impact range. A blended range
+hides the fat tail, and the fat tail is the entire reason anyone buys
+insurance.
+
+---
+
+## Standards covered
+
+Controls are cross-mapped to **NIST CSF 2.0**, **ISO/IEC 27001:2022**,
+**SOC 2 (Trust Services Criteria)**, **PCI DSS v4.0**, the **EU AI Act**, and
+the **OWASP LLM Top 10**.
+
+Coverage figures carry a provenance tag — `DEMO`, `MANUAL`, or `AWS_CONFIG` —
+because a number without a source is an opinion. Coverage records are appended,
+never overwritten, so a superseded figure stays in the history.
+
+---
+
+## Tech stack
+
+Next.js 14 (App Router) · TypeScript · PostgreSQL + Prisma · Chart.js ·
+Tailwind · pdf-lib · deployed on Vercel.
+
+No simulation library — the Monte Carlo engine, Poisson and triangular
+samplers, loss exceedance curve and insurance layer pricing are implemented
+directly in `src/lib/`, which is the part of this project worth reading.
+
+```
+src/
+  app/
+    page.tsx          Risk Simulator
+    controls/         Control Posture
+    risks/            Risk Register
+    roi/              ROI Analysis
+    transfer/         Risk Transfer
+    audit/            Audit Trail
+    methodology/      Methodology
+    api/              route handlers (simulation, controls, evidence, audit, exports)
+  lib/
+    fair.ts           Monte Carlo engine — the core model
+    lec.ts            Loss exceedance curve interpolation, shared by every page
+    insurance.ts      Excess-of-loss layer pricing
+    coverage.ts       Per-framework coverage roll-up
+    report.ts         PDF generation
+    aws-config.ts     AWS Config integration
+  components/         UI
+prisma/               schema + seed
+```
 
 ---
 
@@ -108,33 +150,42 @@ npm install
 ### 2. Database
 
 Any Postgres works. The fastest free option is [Neon](https://neon.tech) —
-create a project, copy the connection string.
+create a project and copy the connection string.
 
 ```bash
 cp .env.example .env
 # paste your DATABASE_URL into .env
 ```
 
-Push the schema and seed the compliance-as-code catalog + scenarios:
+Push the schema and seed the control catalogue, scenarios and demo evidence:
 
 ```bash
 npm run db:push
 npm run db:seed
 ```
 
-### 3. Run locally
+### 3. Run
 
 ```bash
 npm run dev
 ```
 
-Open `http://localhost:3000`. AWS Config isn't configured yet, so "Sync from
-AWS Config" will return labeled demo data — that's expected, see below.
+Open `http://localhost:3000`.
 
-### 4. (Optional) Connect real AWS Config data
+### 4. Tests
 
-Create a read-only IAM user or role with `config:GetComplianceDetailsByConfigRule`,
-then set in `.env`:
+```bash
+npm test
+```
+
+Covers the FAIR engine, risk-rating bands, and the insurance layer maths —
+the last verified against closed-form analytic results for a known
+distribution, not just snapshots.
+
+### 5. (Optional) Connect real AWS Config data
+
+Create a read-only IAM user or role with
+`config:GetComplianceDetailsByConfigRule`, then set in `.env`:
 
 ```
 AWS_REGION=us-east-1
@@ -143,117 +194,55 @@ AWS_SECRET_ACCESS_KEY=...
 ```
 
 By default the app reads three AWS-managed Config rules:
-`iam-user-mfa-enabled`, `ec2-managedinstance-patch-compliance-status`, and
-`cmk-backing-key-rotation-enabled`. Override any of them via
-`AWS_CONFIG_RULE_MFA` / `AWS_CONFIG_RULE_PATCH` / `AWS_CONFIG_RULE_KMS` if your
-account uses custom rule names, or if AWS Config isn't already recording those
-resource types, enable it first in the AWS Config console.
+`iam-user-mfa-enabled`, `ec2-managedinstance-patch-compliance-status` and
+`cmk-backing-key-rotation-enabled`. Override via `AWS_CONFIG_RULE_MFA` /
+`AWS_CONFIG_RULE_PATCH` / `AWS_CONFIG_RULE_KMS`.
 
-Without these three env vars set, every sync call clearly returns
-`"demoMode": true` in its response — the app never presents demo numbers as if
-they were live.
+Without these set, every sync returns `"demoMode": true` in its response — the
+app never presents demo numbers as if they were live.
 
-## Deploy to Vercel
+---
 
-1. Push this repo to GitHub (see below).
-2. Import it at [vercel.com/new](https://vercel.com/new). Framework preset:
-   **Next.js** (auto-detected — no config needed).
-3. Add environment variables in the Vercel project settings: `DATABASE_URL`
-   at minimum, plus the three `AWS_*` vars if you're connecting real AWS Config
-   data.
-4. Deploy. Then run the schema push and seed once against your production
-   database (from your machine, pointed at the same `DATABASE_URL`):
+## Deploy
+
+1. Push to GitHub.
+2. Import at [vercel.com/new](https://vercel.com/new) — framework preset
+   **Next.js**, auto-detected.
+3. Set `DATABASE_URL` in the Vercel project settings (plus the `AWS_*` vars if
+   using real Config data).
+4. Run the schema push and seed once against the production database:
 
 ```bash
 npx prisma db push
 npx tsx prisma/seed.ts
 ```
 
-Every future push to `main` auto-deploys; `postinstall` runs `prisma generate`
-automatically so the Prisma client is always in sync with the schema.
+Every push to `main` auto-deploys; `postinstall` runs `prisma generate`.
 
-## Push to GitHub from scratch
+---
 
-```bash
-git init
-git add .
-git commit -m "Initial commit: FAIR Risk Radar"
-git branch -M main
-git remote add origin https://github.com/<your-username>/fair-risk-radar.git
-git push -u origin main
-```
+## What this model gets wrong
 
-## Project structure
+A quantitative model is not valuable because it is right. It is valuable
+because every assumption is written down and can be argued with specifically —
+which a colour-coded heat map cannot offer. The full list is on the
+**Methodology** page in the app; the headlines:
 
-```
-controls/catalog.yaml          compliance-as-code control catalog (source of truth)
-prisma/schema.prisma           Postgres schema
-prisma/seed.ts                 seeds Control + Scenario tables from catalog.yaml + scenarios.ts
-prisma/reset-coverage.ts       resets control coverage back to demo starting values
-src/lib/fair.ts                FAIR Monte Carlo engine (histogram + Loss Exceedance Curve)
-src/lib/scenarios.ts           industry loss profiles (IBM 2025-calibrated)
-src/lib/threats.ts             threat-type frequency/vulnerability modifiers
-src/lib/frameworks.ts          the 6 compliance frameworks and their Control field
-src/lib/catalog-parser.ts      validates/normalizes an uploaded .yaml or .csv catalog
-src/lib/aws-config.ts          live AWS Config integration + demo fallback
-src/lib/report.ts              CSV / PDF audit-evidence export
-src/lib/prisma.ts              PrismaClient singleton
-src/app/api/scenarios          GET  — scenarios, threats, frameworks, controls + coverage
-src/app/api/risk               GET/POST — assessment history / run + persist a new one
-src/app/api/controls           PATCH — manual control coverage override
-src/app/api/controls/upload    POST — parse an uploaded catalog (not persisted)
-src/app/api/integrations/aws-config   POST — sync coverage from AWS Config
-src/app/api/reports/export     GET  — CSV/PDF export
-src/components/Dashboard.tsx   main dashboard — selectors, charts, control table, upload panel
-src/components/ChartCanvas.tsx generic Chart.js mount/update/destroy wrapper
-src/components/ControlTable.tsx  control posture table with per-framework column
-src/components/UploadCatalogPanel.tsx  catalog upload UI
-src/app/page.tsx               renders <Dashboard />
-src/lib/risk-rating.ts         translates FAIR output (ALE, probability) into 1-5 likelihood/impact
-src/lib/evidence-parser.ts     validates/parses an uploaded .csv or .txt evidence file
-src/app/risks                  risk register: named risks, status, inherent/residual heatmap
-src/app/api/risks              GET/POST — list/create tracked risks
-src/app/api/risks/[id]         PATCH — update status, owner, ratings, linked assessment
-src/app/api/risks/suggest-ratings   POST — FAIR-derived rating suggestions (preview, not persisted)
-src/app/api/controls/[id]/evidence  GET/POST — list/upload+parse evidence attached to a control
-src/components/RiskHeatmap.tsx      5x5 likelihood/impact grid (plain CSS grid, no chart library)
-src/components/EvidenceModal.tsx    evidence upload + parsed-detail viewer
-src/components/Modal.tsx            generic modal shell
-```
+- **Loss ranges are estimates**, anchored to published breach-cost research,
+  not to your incident history.
+- **Threat communities are modelled as independent.** Real incidents
+  correlate, so independence understates the worst years.
+- **Controls are one blended coverage figure**, not individually weighted.
+- **The 70% effectiveness cap is a judgement**, chosen for defensibility
+  rather than derived from data.
+- **The cost curve is a shape, not a budget.** Real remediation spend is lumpy.
+- **Monte Carlo output varies between runs.** Each point on the ROI sweep is an
+  independent simulation — read the trend, not a single point.
+- **Nothing here is actuarial.** The insurance premium loading is illustrative.
+  Use it to frame a conversation with a broker, not to replace one.
 
-## Risk Register
+---
 
-Beyond running simulations, `/risks` is an actual register: named risks with
-an owner and a status (`OPEN` → `MITIGATING` → `ACCEPTED`/`CLOSED`), each
-carrying an **inherent** (before controls) and **residual** (after controls)
-likelihood/impact rating, plotted on two 5x5 heatmaps. Ratings can be typed
-by hand or suggested by running the FAIR engine twice — once at 0% control
-coverage, once at current average coverage — and translating the resulting
-ALE and exceedance probability into a 1-5 band (`src/lib/risk-rating.ts`).
-That translation is a judgment call, not a standard, and stays fully
-editable.
+## Licence
 
-## Evidence
-
-Each control in Control Posture has an **Evidence** viewer: upload a `.csv`
-(an access-review export, a patch-compliance report) or a `.txt` note, and
-it's parsed and stored — CSV rows become a real table, text becomes a
-word-counted note. Unlike the "bring your own catalog" upload, evidence is
-additive and persisted (it doesn't overwrite what other visitors see), which
-is the whole point: it's supposed to accumulate as an audit trail. PDFs and
-other document formats aren't parsed — that needs a real parsing library,
-and a CSV export or note covers what a portfolio demo's evidence realistically
-looks like.
-
-## Data sources
-
-- IBM Security, *Cost of a Data Breach Report 2025* — industry average breach
-  costs and global cost-category breakdown.
-- Verizon, *2025 Data Breach Investigations Report* — ransomware prevalence,
-  cited for context in the methodology panel.
-- Framework: The Open Group, FAIR (Factor Analysis of Information Risk).
-
-Threat Event Frequency and the Vulnerability baseline are not published at
-this granularity anywhere and are explicit modeling assumptions — see the
-in-app methodology panel and `src/lib/scenarios.ts` for the full breakdown of
-what's sourced vs. modeled.
+MIT — see [LICENSE](LICENSE). Attribution required.

@@ -76,6 +76,20 @@ const NAV = [
 
 const STORAGE_KEY = "frr-sidebar-open";
 
+// Burger that morphs into an X. Rendered twice — fixed over the page on small
+// screens (where the panel is off-canvas and there is nothing to sit in), and
+// in the rail's own flow on desktop so it lines up with the icons beneath it
+// instead of floating at its own offset.
+function BurgerGlyph({ open }: { open: boolean }) {
+  return (
+    <>
+      <span className={`block h-[1.5px] w-4 bg-slate-200 transition-transform duration-300 ${open ? "translate-y-[4.5px] rotate-45" : ""}`} />
+      <span className={`block h-[1.5px] w-4 bg-slate-200 transition-opacity duration-200 ${open ? "opacity-0" : ""}`} />
+      <span className={`block h-[1.5px] w-4 bg-slate-200 transition-transform duration-300 ${open ? "-translate-y-[4.5px] -rotate-45" : ""}`} />
+    </>
+  );
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   // AppShell remounts on every route change (each page wraps itself in it),
@@ -116,24 +130,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen flex lg:gap-2 lg:p-3">
+      {/* small screens: the panel is off-canvas, so the control floats */}
       <button
         type="button"
         onClick={toggle}
         aria-label={open ? "Collapse navigation" : "Open navigation"}
         aria-expanded={open}
-        className="fixed top-4 left-4 z-[60] w-9 h-9 rounded-lg border border-border glass-thick flex flex-col items-center justify-center gap-[3px] hover:bg-white/10"
+        className="lg:hidden fixed top-4 left-4 z-[60] w-9 h-9 rounded-lg border border-border glass-thick flex flex-col items-center justify-center gap-[3px] hover:bg-white/10"
       >
-        <span
-          className={`block h-[1.5px] w-4 bg-slate-200 transition-transform duration-300 ${
-            open ? "translate-y-[4.5px] rotate-45" : ""
-          }`}
-        />
-        <span className={`block h-[1.5px] w-4 bg-slate-200 transition-opacity duration-200 ${open ? "opacity-0" : ""}`} />
-        <span
-          className={`block h-[1.5px] w-4 bg-slate-200 transition-transform duration-300 ${
-            open ? "-translate-y-[4.5px] -rotate-45" : ""
-          }`}
-        />
+        <BurgerGlyph open={open} />
       </button>
 
       {/* Scrim, small screens only: there the sidebar overlays content. */}
@@ -145,25 +150,37 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside
         className={`fixed lg:sticky z-50 lg:z-auto left-0 top-0 lg:top-3 h-screen lg:h-[calc(100vh-1.5rem)]
           shrink-0 flex flex-col overflow-hidden border border-border bg-surface rounded-none lg:rounded-2xl
-          px-3 pt-16 pb-6
+          px-3 lg:px-0 pt-16 lg:pt-4 pb-6
           ${hydrated ? "transition-[width,transform,opacity] duration-300" : ""}
           ${open ? "w-60 translate-x-0 opacity-100" : "w-60 lg:w-[68px] -translate-x-full lg:translate-x-0 opacity-0 lg:opacity-100"}`}
         style={{ transitionTimingFunction: "cubic-bezier(0.32, 0.72, 0, 1)" }}
       >
-        <div className="flex items-center gap-2.5 mb-6 px-1.5">
+        <div className={`hidden lg:flex mb-3 ${open ? "px-[22px]" : "justify-center"}`}>
+          <button
+            type="button"
+            onClick={toggle}
+            aria-label={open ? "Collapse navigation" : "Open navigation"}
+            aria-expanded={open}
+            className="w-9 h-9 rounded-lg border border-border flex flex-col items-center justify-center gap-[3px] hover:bg-white/10"
+          >
+            <BurgerGlyph open={open} />
+          </button>
+        </div>
+
+        <div className={`flex items-center gap-2.5 mb-6 ${open ? "px-[22px]" : "px-[22px] lg:px-0 lg:justify-center"}`}>
           <div className="w-7 h-7 shrink-0 rounded-lg flex items-center justify-center bg-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_4px_14px_-4px_rgba(10,132,255,0.8)]">
             <span className="font-mono text-[11px] font-semibold text-white">FR</span>
           </div>
           <span
-            className={`font-semibold text-[15px] tracking-tight text-slate-100 whitespace-nowrap transition-opacity duration-200 ${
-              open ? "opacity-100" : "lg:opacity-0"
+            className={`font-semibold text-[15px] tracking-tight text-slate-100 whitespace-nowrap ${
+              open ? "" : "lg:hidden"
             }`}
           >
             FAIR Risk Radar
           </span>
         </div>
 
-        <nav className="flex flex-col gap-1 text-[13px]">
+        <nav className={`flex flex-col gap-1 text-[13px] ${open ? "px-3" : "px-3 lg:px-0"}`}>
           {NAV.map(({ href, label, Icon }) => {
             const active = pathname === href;
             return (
@@ -174,9 +191,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 aria-label={label}
                 onClick={closeAfterNav}
                 aria-current={active ? "page" : undefined}
-                className={`relative flex items-center gap-2.5 px-2.5 py-2 rounded-lg whitespace-nowrap ${
-                  active ? "text-slate-100 font-medium" : "text-slate-400 hover:text-slate-100"
-                }`}
+                className={`relative flex items-center py-2 rounded-lg whitespace-nowrap ${
+                  open ? "gap-2.5 px-2.5" : "gap-2.5 px-2.5 lg:gap-0 lg:px-0 lg:justify-center lg:mx-auto lg:w-9"
+                } ${active ? "text-slate-100 font-medium" : "text-slate-400 hover:text-slate-100"}`}
               >
                 {active && (
                   <span
@@ -187,20 +204,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <span className="relative shrink-0">
                   <Icon />
                 </span>
-                <span
-                  className={`relative transition-opacity duration-200 ${open ? "opacity-100" : "lg:opacity-0"}`}
-                >
-                  {label}
-                </span>
+                <span className={`relative ${open ? "" : "lg:hidden"}`}>{label}</span>
               </Link>
             );
           })}
         </nav>
 
         <div
-          className={`mt-auto px-2 text-[11px] text-slate-600 leading-relaxed transition-opacity duration-200 ${
-            open ? "opacity-100" : "lg:opacity-0"
-          }`}
+          className={`mt-auto px-[22px] text-[11px] text-slate-600 leading-relaxed ${open ? "" : "lg:hidden"}`}
         >
           Quantitative FAIR model · compliance-as-code · audit-trailed
         </div>
