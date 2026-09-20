@@ -15,7 +15,12 @@ export default function ControlsPage() {
   const [syncing, setSyncing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [uploaded, setUploaded] = useState<{ filename: string; controls: NormalizedControl[] } | null>(null);
-  const [evidenceFor, setEvidenceFor] = useState<{ id: string; name: string } | null>(null);
+  const [evidenceFor, setEvidenceFor] = useState<{
+    id: string;
+    name: string;
+    coveragePct?: number;
+    coverageSource?: string;
+  } | null>(null);
 
   async function load() {
     try {
@@ -104,7 +109,11 @@ export default function ControlsPage() {
           onOverride={overrideCoverage}
           onSyncAws={syncAws}
           syncing={syncing}
-          onViewEvidence={uploaded ? undefined : (id, name) => setEvidenceFor({ id, name })}
+          onViewEvidence={
+            uploaded
+              ? undefined
+              : (id, name, coveragePct, coverageSource) => setEvidenceFor({ id, name, coveragePct, coverageSource })
+          }
         />
       </div>
 
@@ -115,7 +124,13 @@ export default function ControlsPage() {
       />
 
       {evidenceFor && (
-        <EvidenceModal controlId={evidenceFor.id} controlName={evidenceFor.name} onClose={() => setEvidenceFor(null)} />
+        <EvidenceModal
+          controlId={evidenceFor.id}
+          controlName={evidenceFor.name}
+          coveragePct={evidenceFor.coveragePct}
+          coverageSource={evidenceFor.coverageSource}
+          onClose={() => setEvidenceFor(null)}
+        />
       )}
     </AppShell>
   );

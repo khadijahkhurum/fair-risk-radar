@@ -8,11 +8,15 @@
 // only picks up classes that appear literally in source, so constructing
 // "bg-emerald-500" + "/30" at runtime would silently fail to generate the
 // opacity variant.
-function bandForScore(score: number): string {
-  if (score <= 4) return "bg-emerald-500/30";
-  if (score <= 9) return "bg-amber-500/30";
-  if (score <= 16) return "bg-orange-500/30";
-  return "bg-risk/30";
+const BANDS = [
+  { max: 4, label: "Low", cell: "bg-emerald-500/30", dot: "bg-emerald-400" },
+  { max: 9, label: "Moderate", cell: "bg-amber-500/30", dot: "bg-amber-400" },
+  { max: 16, label: "High", cell: "bg-orange-500/30", dot: "bg-orange-400" },
+  { max: 25, label: "Critical", cell: "bg-risk/30", dot: "bg-risk" },
+] as const;
+
+function bandForScore(score: number) {
+  return BANDS.find((b) => score <= b.max) ?? BANDS[BANDS.length - 1];
 }
 
 export interface HeatmapPoint {
@@ -22,7 +26,17 @@ export interface HeatmapPoint {
   impact: number; // 1-5
 }
 
-export function RiskHeatmap({ title, points }: { title: string; points: HeatmapPoint[] }) {
+export function RiskHeatmap({
+  title,
+  points,
+  selectedId,
+  onSelectPoint,
+}: {
+  title: string;
+  points: HeatmapPoint[];
+  selectedId?: string | null;
+  onSelectPoint?: (id: string | null) => void;
+}) {
   const byCell = new Map<string, HeatmapPoint[]>();
   for (const p of points) {
     const key = `${p.likelihood}-${p.impact}`;
@@ -44,19 +58,31 @@ export function RiskHeatmap({ title, points }: { title: string; points: HeatmapP
           {[5, 4, 3, 2, 1].map((impact) =>
             [1, 2, 3, 4, 5].map((likelihood) => {
               const cellPoints = byCell.get(`${likelihood}-${impact}`) ?? [];
+              const band = bandForScore(likelihood * impact);
               return (
                 <div
                   key={`${likelihood}-${impact}`}
-                  className={`h-16 rounded-md ${bandForScore(likelihood * impact)} border border-border flex flex-wrap items-center justify-center gap-1 p-1`}
-                  title={cellPoints.map((p) => p.title).join(", ")}
+                  className={`relative h-16 rounded-md ${band.cell} border border-border flex flex-wrap items-center justify-center gap-1 p-1 transition-colors hover:brightness-125`}
                 >
-                  {cellPoints.map((p) => (
-                    <span
-                      key={p.id}
-                      className="w-2.5 h-2.5 rounded-full bg-slate-100 border border-slate-900"
-                      title={p.title}
-                    />
-                  ))}
+                  <span className="absolute top-0.5 left-1 text-[9px] text-slate-500 tabular-nums select-none">
+                    {likelihood * impact}
+                  </span>
+                  {cellPoints.map((p) => {
+                    const isSelected = p.id === selectedId;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => onSelectPoint?.(isSelected ? null : p.id)}
+                        title={p.title}
+                        className={`w-3 h-3 rounded-full border transition-transform ${
+                          isSelected
+                            ? "bg-white border-accent2 ring-2 ring-accent2 scale-125"
+                            : `${band.dot} border-slate-900/40 hover:scale-125`
+                        }`}
+                      />
+                    );
+                  })}
                 </div>
               );
             })
@@ -66,6 +92,14 @@ export function RiskHeatmap({ title, points }: { title: string; points: HeatmapP
       <div className="flex justify-between text-[10px] text-slate-500 mt-1 pl-5">
         <span>Likelihood 1</span>
         <span>Likelihood 5</span>
+      </div>
+      <div className="flex items-center gap-3 mt-3 pl-5 flex-wrap">
+        {BANDS.map((b) => (
+          <span key={b.label} className="flex items-center gap-1.5 text-[10px] text-slate-400">
+            <span className={`w-2.5 h-2.5 rounded-sm ${b.dot}`} />
+            {b.label}
+          </span>
+        ))}
       </div>
     </div>
   );

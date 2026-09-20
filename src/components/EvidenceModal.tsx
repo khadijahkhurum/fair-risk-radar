@@ -14,7 +14,19 @@ interface EvidenceRow {
   uploadedAt: string;
 }
 
-export function EvidenceModal({ controlId, controlName, onClose }: { controlId: string; controlName: string; onClose: () => void }) {
+export function EvidenceModal({
+  controlId,
+  controlName,
+  coveragePct,
+  coverageSource,
+  onClose,
+}: {
+  controlId: string;
+  controlName: string;
+  coveragePct?: number;
+  coverageSource?: string;
+  onClose: () => void;
+}) {
   const [evidence, setEvidence] = useState<EvidenceRow[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -53,6 +65,18 @@ export function EvidenceModal({ controlId, controlName, onClose }: { controlId: 
 
   return (
     <Modal title={`Evidence — ${controlName}`} onClose={onClose} wide>
+      {coveragePct !== undefined && (
+        <div className="flex items-center justify-between rounded-lg border border-border bg-surface2/40 px-4 py-2.5 mb-4 text-sm">
+          <span className="text-slate-400">
+            Current coverage: <span className="text-slate-100 font-medium">{coveragePct.toFixed(0)}%</span>
+            {coverageSource && <span className="text-slate-500"> ({coverageSource})</span>}
+          </span>
+          <span className="text-xs text-slate-500">
+            {evidence.length} file{evidence.length === 1 ? "" : "s"} on record
+          </span>
+        </div>
+      )}
+
       <label className="flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border hover:border-accent/50 px-4 py-4 cursor-pointer transition-colors mb-4">
         <input
           ref={inputRef}
@@ -71,7 +95,14 @@ export function EvidenceModal({ controlId, controlName, onClose }: { controlId: 
       {error && <p className="text-sm text-risk mb-4">{error}</p>}
 
       {evidence.length === 0 ? (
-        <p className="text-sm text-slate-500">No evidence attached yet.</p>
+        <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center">
+          <p className="text-sm text-slate-400 mb-1">No evidence attached yet.</p>
+          <p className="text-xs text-slate-500 max-w-sm mx-auto">
+            Attach the artifact an auditor would ask for — an access-review export, a patch-compliance report, or an
+            incident-response test log — as a .csv or .txt file. It's parsed and stored here permanently, building an
+            audit trail over time.
+          </p>
+        </div>
       ) : (
         <div className="space-y-2">
           {evidence.map((e) => (

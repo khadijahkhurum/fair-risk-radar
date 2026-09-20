@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { Modal } from "@/components/Modal";
 import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
@@ -76,6 +76,15 @@ export default function RisksPage() {
     if (res.ok) loadRisks();
   }
 
+  const [selectedRiskId, setSelectedRiskId] = useState<string | null>(null);
+  const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+
+  useEffect(() => {
+    if (selectedRiskId) {
+      rowRefs.current[selectedRiskId]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [selectedRiskId]);
+
   const inherentPoints: HeatmapPoint[] = risks.map((r) => ({
     id: r.id,
     title: r.title,
@@ -113,8 +122,18 @@ export default function RisksPage() {
 
       {risks.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 rounded-xl border border-border bg-surface p-5">
-          <RiskHeatmap title="Inherent Risk (before controls)" points={inherentPoints} />
-          <RiskHeatmap title="Residual Risk (after controls)" points={residualPoints} />
+          <RiskHeatmap
+            title="Inherent Risk (before controls)"
+            points={inherentPoints}
+            selectedId={selectedRiskId}
+            onSelectPoint={setSelectedRiskId}
+          />
+          <RiskHeatmap
+            title="Residual Risk (after controls)"
+            points={residualPoints}
+            selectedId={selectedRiskId}
+            onSelectPoint={setSelectedRiskId}
+          />
         </div>
       )}
 
@@ -144,7 +163,16 @@ export default function RisksPage() {
                   const inherent = riskScoreLabel(r.inherentLikelihood, r.inherentImpact);
                   const residual = riskScoreLabel(r.residualLikelihood, r.residualImpact);
                   return (
-                    <tr key={r.id} className="border-b border-border/60 last:border-0">
+                    <tr
+                      key={r.id}
+                      ref={(el) => {
+                        rowRefs.current[r.id] = el;
+                      }}
+                      onClick={() => setSelectedRiskId(r.id === selectedRiskId ? null : r.id)}
+                      className={`border-b border-border/60 last:border-0 cursor-pointer transition-colors ${
+                        r.id === selectedRiskId ? "bg-accent/10 ring-1 ring-inset ring-accent2/40" : "hover:bg-surface2/60"
+                      }`}
+                    >
                       <td className="px-5 py-3">
                         <div className="font-medium text-slate-100">{r.title}</div>
                         <div className="text-xs text-slate-500">{r.description}</div>

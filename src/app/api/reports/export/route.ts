@@ -24,6 +24,8 @@ export async function GET(req: NextRequest) {
       iso27001: c.iso27001,
       soc2: c.soc2,
       pciDss: c.pciDss,
+      euAiAct: c.euAiAct,
+      owaspLlm: c.owaspLlm,
       coveragePct: c.coverage[0]?.coveragePct ?? 0,
       coverageSource: c.coverage[0]?.source ?? "DEMO",
     }));
@@ -39,6 +41,8 @@ export async function GET(req: NextRequest) {
           p10Ale: latest.p10Ale,
           p50Ale: latest.p50Ale,
           p90Ale: latest.p90Ale,
+          riskTolerance: latest.riskTolerance,
+          pExceedTolerance: latest.pExceedTolerance,
           generatedAt: latest.createdAt,
         }
       : null;

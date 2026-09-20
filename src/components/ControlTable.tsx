@@ -44,7 +44,7 @@ export function ControlTable({
   onOverride?: (controlId: string, coveragePct: number) => void;
   onSyncAws?: () => void;
   syncing?: boolean;
-  onViewEvidence?: (controlId: string, controlName: string) => void;
+  onViewEvidence?: (controlId: string, controlName: string, coveragePct?: number, coverageSource?: string) => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftPct, setDraftPct] = useState("");
@@ -155,7 +155,7 @@ export function ControlTable({
                 {onViewEvidence && (
                   <td className="px-5 py-3">
                     <button
-                      onClick={() => onViewEvidence(row.id, row.name)}
+                      onClick={() => onViewEvidence(row.id, row.name, row.coveragePct, row.coverageSource)}
                       className="text-sm text-accent hover:text-accent2 transition-colors"
                     >
                       View
