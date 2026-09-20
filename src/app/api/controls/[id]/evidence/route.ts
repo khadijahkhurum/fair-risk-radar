@@ -7,6 +7,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { parseEvidence, EvidenceParseError } from "@/lib/evidence-parser";
 
+// Read hits the live DB on every request. Without this, Next.js 14 treats a
+// no-arg GET route handler as static and bakes a build-time response into the
+// deployment — so manual coverage overrides never show up in production.
+export const dynamic = "force-dynamic";
+
 const MAX_UPLOAD_BYTES = 1024 * 1024; // 1MB
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {

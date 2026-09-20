@@ -201,7 +201,7 @@ export function Dashboard() {
 
   async function loadScenarios() {
     try {
-      const res = await fetch("/api/scenarios");
+      const res = await fetch("/api/scenarios", { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load");
       setScenarios(data.scenarios);
@@ -220,7 +220,7 @@ export function Dashboard() {
 
   async function loadHistory() {
     try {
-      const res = await fetch("/api/risk");
+      const res = await fetch("/api/risk", { cache: "no-store" });
       const data = await res.json();
       if (res.ok) setHistory(data.history);
     } catch {

@@ -5,6 +5,11 @@ import { prisma } from "@/lib/prisma";
 import { scenarios } from "@/lib/scenarios";
 import { threats } from "@/lib/threats";
 
+// Read hits the live DB on every request. Without this, Next.js 14 treats a
+// no-arg GET route handler as static and bakes a build-time response into the
+// deployment — so manual coverage overrides never show up in production.
+export const dynamic = "force-dynamic";
+
 function isRating(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 5;
 }

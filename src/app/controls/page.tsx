@@ -21,10 +21,14 @@ export default function ControlsPage() {
     coveragePct?: number;
     coverageSource?: string;
   } | null>(null);
+  // Quick knob on the Average Coverage tile itself — editing 8 rows one at a
+  // time to move the headline number is too slow for a live demo.
+  const [bulkPct, setBulkPct] = useState("");
+  const [applyingBulk, setApplyingBulk] = useState(false);
 
   async function load() {
     try {
-      const res = await fetch("/api/scenarios");
+      const res = await fetch("/api/scenarios", { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load");
       setFrameworks(data.frameworks);
@@ -38,13 +42,32 @@ export default function ControlsPage() {
     load();
   }, []);
 
-  async function overrideCoverage(controlId: string, coveragePct: number) {
+  async function patchCoverage(controlId: string, coveragePct: number) {
     const res = await fetch("/api/controls", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ controlId, coveragePct }),
     });
-    if (res.ok) load();
+    return res.ok;
+  }
+
+  async function overrideCoverage(controlId: string, coveragePct: number) {
+    if (await patchCoverage(controlId, coveragePct)) load();
+  }
+
+  // Set every control to the same coverage, then reload once — not once per
+  // control, which would fire N overlapping refetches.
+  async function applyBulkCoverage() {
+    const pct = Number(bulkPct);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100 || controls.length === 0) return;
+    setApplyingBulk(true);
+    try {
+      await Promise.all(controls.map((c) => patchCoverage(c.id, pct)));
+      await load();
+      setBulkPct("");
+    } finally {
+      setApplyingBulk(false);
+    }
   }
 
   async function syncAws() {
@@ -90,6 +113,28 @@ export default function ControlsPage() {
           <div className="rounded-xl border border-border bg-surface p-4">
             <div className="text-xs text-slate-400 mb-1">Average Coverage</div>
             <div className={`text-xl font-mono font-semibold tabular-nums ${coverageColor}`}>{avgCoverage.toFixed(0)}%</div>
+            <div className="flex items-center gap-1.5 mt-2">
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={bulkPct}
+                onChange={(e) => setBulkPct(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") applyBulkCoverage();
+                }}
+                placeholder="Set all"
+                aria-label="Set coverage for every control"
+                className="w-20 bg-surface2 border border-border rounded px-1.5 py-1 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-accent/60"
+              />
+              <button
+                onClick={applyBulkCoverage}
+                disabled={applyingBulk || bulkPct === ""}
+                className="text-xs px-2 py-1 rounded border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-40 transition-colors"
+              >
+                {applyingBulk ? "Applying…" : "Apply to all"}
+              </button>
+            </div>
           </div>
           <div className="rounded-xl border border-border bg-surface p-4">
             <div className="text-xs text-slate-400 mb-1">Controls Tracked</div>

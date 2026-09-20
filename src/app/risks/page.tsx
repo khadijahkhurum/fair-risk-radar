@@ -51,14 +51,14 @@ export default function RisksPage() {
   const [showForm, setShowForm] = useState(false);
 
   async function loadRisks() {
-    const res = await fetch("/api/risks");
+    const res = await fetch("/api/risks", { cache: "no-store" });
     const data = await res.json();
     if (res.ok) setRisks(data.risks);
     else setLoadError(data.error ?? "Failed to load risk register");
   }
 
   useEffect(() => {
-    fetch("/api/scenarios")
+    fetch("/api/scenarios", { cache: "no-store" })
       .then((r) => r.json())
       .then((data) => {
         setScenarios(data.scenarios);

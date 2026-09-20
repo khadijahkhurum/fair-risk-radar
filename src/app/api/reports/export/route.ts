@@ -4,6 +4,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { buildCsvExport, buildPdfExport, type ExportRow } from "@/lib/report";
 
+// Read hits the live DB on every request. Without this, Next.js 14 treats a
+// no-arg GET route handler as static and bakes a build-time response into the
+// deployment — so manual coverage overrides never show up in production.
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest) {
   const format = req.nextUrl.searchParams.get("format") ?? "csv";
   if (format !== "csv" && format !== "pdf") {

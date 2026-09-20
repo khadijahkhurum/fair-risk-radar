@@ -68,7 +68,7 @@ export default function RoiPage() {
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
-    fetch("/api/scenarios")
+    fetch("/api/scenarios", { cache: "no-store" })
       .then((r) => r.json())
       .then((data) => {
         setScenarios(data.scenarios);
@@ -307,7 +307,22 @@ export default function RoiPage() {
         <div className="flex items-center gap-3 mt-4">
           <button
             type="button"
-            onClick={() => setRefreshNonce((n) => n + 1)}
+            onClick={() => {
+              // Re-read today's actual coverage too — it changes whenever
+              // someone overrides a control on Control Posture.
+              fetch("/api/scenarios", { cache: "no-store" })
+                .then((r) => r.json())
+                .then((data) => {
+                  const rows = (data.controls ?? []) as ControlRow[];
+                  if (rows.length > 0) {
+                    setCurrentCoveragePct(
+                      Math.round(rows.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / rows.length)
+                    );
+                  }
+                })
+                .catch(() => {});
+              setRefreshNonce((n) => n + 1);
+            }}
             disabled={loading || !scenarioId}
             className="btn-primary"
           >
