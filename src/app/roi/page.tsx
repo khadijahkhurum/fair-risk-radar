@@ -185,6 +185,11 @@ export default function RoiPage() {
   const toleranceSet = riskTolerance !== "" && Number(riskTolerance) > 0;
   const fullCoveragePoint = useMemo(() => curve.find((p) => p.coverage === 100) ?? null, [curve]);
   const ceilingExceedance = fullCoveragePoint?.pExceedTolerance ?? null;
+  // The most this scenario's risk can ever be reduced by controls. A cost
+  // estimate far above this makes every coverage level value-destroying, and
+  // the model's "optimum" collapses to spending nothing — which is a signal
+  // about the cost input, not real advice.
+  const maxAvoidable = fullCoveragePoint?.riskAvoided ?? null;
   const toleranceUnreachable =
     toleranceSet && ceilingExceedance !== null && ceilingExceedance > TARGET_EXCEED_PROBABILITY;
   // If controls can't get there, the actionable answer isn't "spend more" —
@@ -477,11 +482,15 @@ export default function RoiPage() {
           </div>
           <p className="text-sm text-slate-400 mt-2">
             At today&apos;s real coverage, net benefit is {currencyFull(currentPoint.netBenefit)}/year.{" "}
-            {optimalPoint && optimalPoint.coverage !== currentPoint.coverage
+            {!optimalPoint || optimalPoint.coverage === currentPoint.coverage
+              ? `That's already the model's optimum for this cost estimate.`
+              : optimalPoint.coverage > currentPoint.coverage
               ? `Closing the gap to the ${optimalPoint.coverage}% optimum would add another ${currencyFull(
                   optimalPoint.netBenefit - currentPoint.netBenefit
                 )}/year in net benefit.`
-              : `That's already the model's optimum for this cost estimate.`}
+              : `At the cost you entered, the model puts the best return BELOW today's coverage (${optimalPoint.coverage}%) — meaning it thinks you are over-spending by ${currencyFull(
+                  optimalPoint.netBenefit - currentPoint.netBenefit
+                )}/year. Treat that as a flag on the cost estimate, not as advice to remove controls: stripping out controls you already run is rarely the real answer, and coverage you have already paid for is a sunk cost this model does not know about.`}
           </p>
         </div>
       )}
@@ -523,7 +532,13 @@ export default function RoiPage() {
                 )} avoided per $1 spent)`
               : ""}
             .{" "}
-            {optimalPoint.coverage < 100
+            {optimalPoint.coverage === 0
+              ? `That is the model saying no control investment pays for itself at this cost estimate. The entire avoidable loss for this scenario is ${
+                  maxAvoidable !== null ? currencyFull(maxAvoidable) : "—"
+                }/year, against ${currencyFull(
+                  Number(costAt100)
+                )} to reach full coverage — so every coverage level destroys value, and "spend nothing" wins by default. That is almost always a sign the cost figure is too high for this scenario rather than a genuine recommendation; a realistic estimate sits below the avoidable-loss figure.`
+              : optimalPoint.coverage < 100
               ? `Pushing coverage past this point costs more than the risk it removes — the classic diminishing-returns curve behind every "how much security is enough" conversation.`
               : `At this cost, full coverage still returns more than it spends at every step — this control investment dominates the risk regardless of how far you push it. To see an interior trade-off point instead of a corner solution, try a higher cost estimate (roughly ${currencyFull(
                   optimalPoint.riskAvoided * 0.6
