@@ -7,8 +7,15 @@ import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { UploadCatalogPanel } from "@/components/UploadCatalogPanel";
 import { EvidenceModal } from "@/components/EvidenceModal";
 import type { NormalizedControl } from "@/lib/catalog-parser";
-import { coverageByFramework, averageOfFrameworks, mapsToFramework, identicalSetPeers } from "@/lib/coverage";
+import {
+  coverageByFramework,
+  averageOfFrameworks,
+  averageAssessed,
+  mapsToFramework,
+  identicalSetPeers,
+} from "@/lib/coverage";
 import { Modal } from "@/components/Modal";
+import { StatusBadge } from "@/components/StatusBadge";
 
 export default function ControlsPage() {
   const [frameworks, setFrameworks] = useState<FrameworkColumn[]>([]);
@@ -141,24 +148,43 @@ export default function ControlsPage() {
   // picker — "our NIST + ISO posture" is a different number from "our posture
   // across all six", and the tile should answer whichever one is on screen.
   // With nothing selected there's no meaningful subset, so fall back to all.
-  const scoredFrameworks = frameworkCoverage.filter((f) => f.coveragePct !== null);
+  const scoredFrameworks = frameworkCoverage.filter((f) => f.implementationPct !== null);
   const countedFrameworks =
     frameworkIds.length > 0 ? scoredFrameworks.filter((f) => frameworkIds.includes(f.id)) : scoredFrameworks;
   const avgCoverage = averageOfFrameworks(countedFrameworks);
+  // G2: the number that can honestly sit beside a framework's name.
+  const avgAssessed = averageAssessed(countedFrameworks);
   const sourceCounts = controls.reduce<Record<string, number>>((acc, c) => {
     const src = c.coverageSource ?? "DEMO";
     acc[src] = (acc[src] ?? 0) + 1;
     return acc;
   }, {});
-  const coverageColor =
-    avgCoverage >= 80 ? "text-emerald-400" : avgCoverage >= 50 ? "text-amber-400" : "text-risk";
+  // Audit A2 / WCAG 2.2 1.4.1: the band was carried by colour alone. The
+  // percentage is shown either way, but "is 62% good?" is exactly the
+  // judgement the colour was making silently — so it is now stated in words
+  // as well, with the band boundaries named so the reader can check it.
+  const coverageBand =
+    avgCoverage >= 80
+      ? { status: "pass" as const, color: "text-emerald-400", label: "Strong (80%+)" }
+      : avgCoverage >= 50
+      ? { status: "warn" as const, color: "text-amber-400", label: "Partial (50–79%)" }
+      : { status: "fail" as const, color: "text-risk", label: "Weak (under 50%)" };
+  const coverageColor = coverageBand.color;
 
   return (
     <AppShell>
       <header className="mb-8">
         <h1 className="text-2xl font-semibold tracking-tight">Control Posture</h1>
         <p className="text-slate-400 mt-1">
-          Compliance-as-code control catalog, cross-mapped to six frameworks, with provenance-tagged coverage.
+          Compliance-as-code control catalogue, cross-mapped to six frameworks, with provenance-tagged coverage.
+        </p>
+        <p className="text-sm text-amber-400/90 mt-3 border border-amber-400/30 bg-amber-500/10 rounded-lg px-3 py-2">
+          <span className="font-semibold">Partial mapping — a starter set, not a complete framework implementation.</span>{" "}
+          <span className="text-slate-300">
+            This catalogue holds {controls.length} controls. The frameworks below run to dozens or hundreds of
+            requirements each, so an implementation percentage on its own would overstate posture by an order of
+            magnitude. Scope and implementation are reported separately, and only their product is labelled coverage.
+          </span>
         </p>
       </header>
 
@@ -167,10 +193,18 @@ export default function ControlsPage() {
       )}
 
       {!uploaded && controls.length > 0 && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
           <div className="rounded-xl border border-border bg-surface p-4">
-            <div className="text-xs text-slate-400 mb-1">Average Coverage</div>
-            <div className={`text-xl font-mono font-semibold tabular-nums ${coverageColor}`}>{avgCoverage.toFixed(0)}%</div>
+            <div className="text-xs text-slate-400 mb-1">
+              Average Implementation
+              <span className="block text-[10px] text-slate-600 leading-tight">of mapped controls only</span>
+            </div>
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className={`text-xl font-mono font-semibold tabular-nums ${coverageColor}`}>
+                {avgCoverage.toFixed(0)}%
+              </span>
+              <StatusBadge status={coverageBand.status}>{coverageBand.label}</StatusBadge>
+            </div>
             <div className="flex items-center gap-1.5 mt-2">
               <input
                 type="number"
@@ -206,6 +240,15 @@ export default function ControlsPage() {
             </div>
           </div>
           <div className="rounded-xl border border-border bg-surface p-4">
+            <div className="text-xs text-slate-400 mb-1">
+              Assessed Coverage
+              <span className="block text-[10px] text-slate-600 leading-tight">scope x implementation</span>
+            </div>
+            <div className="text-xl font-mono font-semibold tabular-nums text-slate-100">
+              {avgAssessed === null ? "—" : `${avgAssessed.toFixed(1)}%`}
+            </div>
+          </div>
+          <div className="rounded-xl border border-border bg-surface p-4">
             <div className="text-xs text-slate-400 mb-1">Coverage Provenance</div>
             <div className="text-xs text-slate-300 mt-1.5 space-x-2">
               {Object.entries(sourceCounts).map(([src, count]) => (
@@ -230,20 +273,29 @@ export default function ControlsPage() {
             </span>
           </div>
           <p className="text-[11px] text-slate-500 mb-4">
-            Drag a slider to shift every control mapped to that framework. Controls are cross-mapped, so related
-            frameworks move too — by less, in proportion to how many controls they share. That coupling is real: it is
-            the same control being counted by both frameworks, which is the point of one cross-mapped catalogue.
+            Three different questions, never collapsed into one number.{" "}
+            <span className="text-slate-400">Scope</span> is how much of the framework this catalogue addresses at
+            all. <span className="text-slate-400">Implementation</span> is how well the controls we do map are run —
+            that is what the slider edits. <span className="text-slate-400">Assessed coverage</span> is their product,
+            and it is the only one of the three that can honestly sit beside a framework&apos;s name.
+            <br />
+            Controls are cross-mapped, so dragging one framework moves the others that share those controls — by less,
+            in proportion to how many they share. Their scope still differs, because each framework has its own
+            requirement population.
           </p>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-5">
             {frameworkCoverage.map((f) => {
               const counted = frameworkIds.length === 0 || frameworkIds.includes(f.id);
               const peers = identicalSetPeers(f, frameworkCoverage);
-              const live = draftFw[f.id] ?? f.coveragePct ?? 0;
-              const disabled = f.coveragePct === null || savingFw !== null || !!uploaded;
+              const live = draftFw[f.id] ?? f.implementationPct ?? 0;
+              const disabled = f.implementationPct === null || savingFw !== null || !!uploaded;
+              // Assessed coverage recomputed against the dragged value, so the
+              // bottom line moves with the slider rather than lagging a save.
+              const liveAssessed = f.scopePct === null ? null : (f.scopePct * live) / 100;
               return (
                 <div key={f.id} className={counted ? "" : "opacity-45"}>
                   <div className="flex items-baseline justify-between gap-2 mb-1.5">
-                    <span className="text-sm text-slate-300 truncate" title={f.label}>
+                    <span className="text-sm text-slate-200 truncate" title={f.label}>
                       {f.label}
                       {!counted && <span className="text-[10px] text-slate-600 ml-1.5">not counted</span>}
                       {peers.length > 0 && (
@@ -251,48 +303,79 @@ export default function ControlsPage() {
                           className="text-[10px] text-slate-500 ml-1.5 border border-border rounded px-1 py-px"
                           title={`Maps to exactly the same controls as: ${peers.join(
                             ", "
-                          )}. Coverage is stored per control, so these frameworks always share one number.`}
+                          )}. Implementation is therefore shared — but scope differs, because each framework has its own requirement population.`}
                         >
-                          same set as {peers.length} other{peers.length === 1 ? "" : "s"}
+                          shared controls
                         </span>
                       )}
                     </span>
-                    <span className="flex items-baseline gap-2 shrink-0">
-                      <span
-                        className={`font-mono text-sm tabular-nums ${
-                          f.coveragePct === null
-                            ? "text-slate-600"
-                            : live >= 80
-                            ? "text-emerald-400"
-                            : live >= 50
-                            ? "text-amber-400"
-                            : "text-risk"
-                        }`}
-                      >
-                        {f.coveragePct === null ? "—" : `${Math.round(live)}%`}
-                      </span>
-                      <span className="text-[11px] text-slate-500">
-                        {f.mappedCount} control{f.mappedCount === 1 ? "" : "s"}
-                      </span>
+                  </div>
+
+                  {/* Scope — how much of the framework this catalogue addresses at all. */}
+                  <div className="flex items-baseline justify-between gap-2 text-[11px] text-slate-500">
+                    <span>
+                      Scope ·{" "}
+                      {f.population === null
+                        ? "no single requirement population"
+                        : `${f.distinctReferences} of ${f.approximate ? "~" : ""}${f.population} ${f.unit}`}
+                    </span>
+                    <span className="font-mono text-slate-400">
+                      {f.scopePct === null ? "n/a" : `${f.scopePct.toFixed(1)}%`}
                     </span>
                   </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={live}
-                    disabled={disabled}
-                    aria-label={`${f.label} coverage`}
-                    onChange={(e) => setDraftFw((d) => ({ ...d, [f.id]: Number(e.target.value) }))}
-                    onPointerUp={(e) => applyFrameworkCoverage(f.id, Number((e.target as HTMLInputElement).value))}
-                    onKeyUp={(e) => applyFrameworkCoverage(f.id, Number((e.target as HTMLInputElement).value))}
-                    className="w-full disabled:opacity-40"
-                  />
+
+                  {/* Implementation — the only dimension the slider edits. */}
+                  <div className="flex items-center gap-3 mt-1">
+                    <span className="text-[11px] text-slate-500 shrink-0 w-24">Implementation</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={live}
+                      disabled={disabled}
+                      aria-label={`${f.label} implementation across mapped controls`}
+                      onChange={(e) => setDraftFw((d) => ({ ...d, [f.id]: Number(e.target.value) }))}
+                      onPointerUp={(e) => applyFrameworkCoverage(f.id, Number((e.target as HTMLInputElement).value))}
+                      onKeyUp={(e) => applyFrameworkCoverage(f.id, Number((e.target as HTMLInputElement).value))}
+                      className="flex-1 disabled:opacity-40"
+                    />
+                    <span
+                      className={`font-mono text-sm tabular-nums w-12 text-right shrink-0 ${
+                        f.implementationPct === null
+                          ? "text-slate-600"
+                          : live >= 80
+                          ? "text-emerald-400"
+                          : live >= 50
+                          ? "text-amber-400"
+                          : "text-risk"
+                      }`}
+                    >
+                      {f.implementationPct === null ? "—" : `${Math.round(live)}%`}
+                    </span>
+                  </div>
+
+                  {/* Assessed — scope x implementation. The honest headline. */}
+                  <div className="flex items-baseline justify-between gap-2 text-[11px] mt-1 pt-1 border-t border-white/5">
+                    <span className="text-slate-500">
+                      Assessed coverage{" "}
+                      <span className="text-slate-600">
+                        {f.scopePct !== null ? `(${f.scopePct.toFixed(1)}% x ${Math.round(live)}%)` : ""}
+                      </span>
+                    </span>
+                    <span className="font-mono text-slate-200">
+                      {liveAssessed === null ? "not quantified" : `${liveAssessed.toFixed(1)}%`}
+                    </span>
+                  </div>
+
+                  <div className="text-[10px] text-slate-600 mt-1">
+                    {f.mappedCount} control{f.mappedCount === 1 ? "" : "s"} mapped
+                  </div>
                 </div>
               );
             })}
           </div>
+
           {savingFw && <div className="text-[11px] text-slate-500 mt-3">Saving coverage…</div>}
         </div>
       )}

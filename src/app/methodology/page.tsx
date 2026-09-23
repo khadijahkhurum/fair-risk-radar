@@ -7,7 +7,15 @@
 // The constants are IMPORTED, not retyped, so the documentation cannot drift
 // away from the engine it describes.
 import { AppShell } from "@/components/AppShell";
-import { DEFAULT_TRIALS, LEC_POINTS, MAX_CONTROL_RISK_REDUCTION } from "@/lib/fair";
+import { DEFAULT_TRIALS, WHATIF_TRIALS, LEC_POINTS, MAX_CONTROL_RISK_REDUCTION } from "@/lib/fair";
+// E3: threshold and trial counts come from the modules the engine uses, so
+// this page cannot document a number the simulation is not running.
+import { GREEN_THRESHOLD as TARGET_EXCEED_PROBABILITY } from "@/lib/stats";
+// G9: the provenance register is data, so this page cannot drift from it.
+import { PARAMETER_PROVENANCE, BASIS_LABEL, provenanceSummary } from "@/lib/provenance";
+// G8: the retention schedule is data, so the page and the policy agree.
+import { RETENTION_SCHEDULE } from "@/lib/risk-governance";
+import { StatusBadge } from "@/components/StatusBadge";
 import { DEFAULT_PREMIUM_LOADING } from "@/lib/insurance";
 import { frameworks } from "@/lib/frameworks";
 
@@ -16,8 +24,6 @@ export const metadata = {
   description: "The FAIR model, Monte Carlo engine, assumptions and limitations behind FAIR Risk Radar.",
 };
 
-const TARGET_EXCEED_PROBABILITY = 0.1;
-const WHATIF_TRIALS = 4000;
 
 function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
   return (
@@ -33,6 +39,7 @@ function Term({ children }: { children: React.ReactNode }) {
 }
 
 export default function MethodologyPage() {
+  const summary = provenanceSummary();
   return (
     <AppShell>
       <header className="mb-8">
@@ -51,11 +58,16 @@ export default function MethodologyPage() {
             ["model", "The FAIR model"],
             ["engine", "Monte Carlo engine"],
             ["controls", "Controls and coverage"],
+            ["scope", "Framework coverage"],
             ["lec", "Reading the curve"],
             ["tolerance", "Tolerance and the bar"],
             ["roi", "Cost-benefit"],
             ["transfer", "Risk transfer"],
             ["provenance", "Data provenance"],
+            ["provenance-table", "Parameter provenance"],
+            ["governance", "Model governance"],
+            ["retention", "Retention and erasure"],
+            ["validation", "Validation evidence"],
             ["limits", "Assumptions and limits"],
             ["howto", "How to use it"],
             ["sources", "Sources"],
@@ -132,6 +144,20 @@ export default function MethodologyPage() {
           The sorted results give the mean, the 10th, 50th and 90th percentiles, a histogram, and a Loss Exceedance
           Curve sampled at <Term>{LEC_POINTS}</Term> points.
         </p>
+        <p>
+          <strong>Every run is seeded and reproducible.</strong> Each simulation draws from a seeded generator, and the
+          seed is stored on the assessment alongside the engine version and parameter-set version. A persisted result
+          can therefore be re-derived exactly — which is what an auditor means when they ask you to reproduce a number
+          that went into a budget decision. An unseeded model can be right and still fail validation, because there is
+          no evidence it was right at any specific point in time.
+        </p>
+        <p>
+          <strong>Every figure carries its sampling error.</strong> The engine reports the standard error of the mean
+          and of each exceedance probability, and the interface renders the interval rather than the point:{" "}
+          <Term>57.0% ± 0.9pp</Term>, not <Term>56.65%</Term>. Printing four significant figures on an estimate with
+          about one is the most corrosive thing a quantitative tool can do, because false precision is exactly what
+          earns unwarranted trust.
+        </p>
       </Section>
 
       <Section id="controls" title="Controls and coverage">
@@ -149,9 +175,54 @@ export default function MethodologyPage() {
         </p>
         <p>
           Coverage is stored <strong>per control</strong>, not per control-per-framework. Two frameworks mapping the
-          same controls therefore always show the same coverage — that is the data model, not a bug. Frameworks differ
-          by <em>which</em> controls they demand, not by how well you run them. The catalogue cross-maps to{" "}
-          {frameworks.length} frameworks: {frameworks.map((f) => f.label).join(", ")}.
+          same controls therefore share one <em>implementation</em> figure — that is the data model, not a bug. What
+          differs between them is <em>scope</em>, because each framework has its own requirement population. The
+          catalogue cross-maps to {frameworks.length} frameworks: {frameworks.map((f) => f.label).join(", ")}.
+        </p>
+      </Section>
+
+      <Section id="scope" title="Framework coverage: scope, implementation, assessed">
+        <p>
+          A single percentage beside a framework&apos;s name is the most dangerous number a GRC tool can print. Read
+          &ldquo;NIST CSF 2.0 — 57%&rdquo; and you will conclude the organisation meets 57% of NIST CSF. If that 57%
+          is actually the mean implementation of a handful of mapped controls, the claim is wrong by more than an
+          order of magnitude — and screenshotted into a board pack, a vendor questionnaire or an insurer&apos;s
+          underwriting file, it stops being a technical problem.
+        </p>
+        <p>This tool therefore reports three separate figures and never collapses them:</p>
+        <ul className="list-disc pl-5 space-y-1.5">
+          <li>
+            <Term>Scope</Term> — distinct requirement references this catalogue maps, divided by the framework&apos;s
+            published requirement population.
+          </li>
+          <li>
+            <Term>Implementation</Term> — mean coverage across the controls that are mapped. Says nothing about the
+            requirements that are not.
+          </li>
+          <li>
+            <Term>Assessed coverage</Term> — scope x implementation. The only one of the three that belongs beside a
+            framework&apos;s name.
+          </li>
+        </ul>
+        <p>
+          The requirement populations are taken from each framework&apos;s published text:{" "}
+          {frameworks
+            .filter((f) => f.population !== null)
+            .map((f) => `${f.label} (${f.approximate ? "~" : ""}${f.population} ${f.unit})`)
+            .join(", ")}
+          .
+        </p>
+        <p>
+          The EU AI Act deliberately has <strong>no scope figure</strong>. Its obligations depend on a system&apos;s
+          risk classification, so there is no single denominator to divide by. Inventing one to produce a tidy
+          percentage would be the same error in the opposite direction, so the tool reports implementation for it and
+          says scope is not quantified.
+        </p>
+        <p>
+          PCI DSS is counted at <em>sub-requirement</em> level, which is the level this catalogue maps to. Counting
+          its 12 principal requirements instead would flatter the scope figure roughly twenty-five-fold — an example
+          of how much a denominator choice can move a compliance claim, and why the basis for each is stated rather
+          than assumed.
         </p>
       </Section>
 
@@ -166,9 +237,15 @@ export default function MethodologyPage() {
           does.
         </p>
         <p>
-          Values between the {LEC_POINTS} sampled points are linearly interpolated, and the inverse lookup (&ldquo;what
-          tolerance would be green?&rdquo;) uses the same interpolation in reverse, so the two can never contradict
-          each other at a boundary.
+          <strong>One estimator, everywhere.</strong> Every probability in this tool — on screen, in the export and in
+          the database — is the exact empirical fraction of the simulated sample, found by binary search. The curve
+          above is built from that same function, so a point on the chart and the figure beside it cannot disagree.
+          The {LEC_POINTS}-point grid is for drawing only; nothing is estimated from it.
+        </p>
+        <p>
+          The same discipline makes <Term>P90</Term> and &ldquo;the tolerance that would be green&rdquo; the{" "}
+          <em>same number</em> rather than two estimates of it: both are the 90th-percentile order statistic of the
+          sample. Type the displayed P90 into the tolerance box and it lands on the 10% bar, by construction.
         </p>
       </Section>
 
@@ -242,6 +319,215 @@ export default function MethodologyPage() {
         </p>
       </Section>
 
+      <Section id="provenance-table" title="Parameter provenance">
+        <p>
+          Coverage figures in this tool carry a provenance tag because a number without a source is an opinion. The
+          model&apos;s own parameters are held to the same standard here. The column that matters is <strong>basis</strong>:
+          whether a value is taken from a publication, derived from one, or a judgement call with nothing behind it but
+          reasoning.
+        </p>
+        <p className="text-slate-300">
+          Of {summary.total} parameters: <strong>{summary.SOURCED}</strong> sourced,{" "}
+          <strong>{summary.DERIVED}</strong> derived from a sourced figure, and{" "}
+          <strong>{summary.JUDGEMENT}</strong> unsourced judgement. That last number is the honest headline — most of
+          what drives the frequency side of this model is assumption, and the table says which.
+        </p>
+        <div className="overflow-x-auto -mx-1">
+          <table className="w-full text-[13px] border-collapse">
+            <caption className="sr-only">
+              Model parameters with their value, evidential basis, source, derivation and last review date
+            </caption>
+            <thead>
+              <tr className="text-left text-slate-400 border-b border-border">
+                <th scope="col" className="py-2 pr-3 font-medium">Parameter</th>
+                <th scope="col" className="py-2 pr-3 font-medium">Value</th>
+                <th scope="col" className="py-2 pr-3 font-medium">Basis</th>
+                <th scope="col" className="py-2 pr-3 font-medium">Source</th>
+                <th scope="col" className="py-2 pr-3 font-medium">Derivation</th>
+                <th scope="col" className="py-2 font-medium">Reviewed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {PARAMETER_PROVENANCE.map((row) => (
+                <tr key={row.parameter} className="border-b border-white/5 align-top">
+                  <th scope="row" className="py-2 pr-3 font-medium text-slate-200 text-left">
+                    {row.parameter}
+                  </th>
+                  <td className="py-2 pr-3 font-mono text-[12px] text-slate-300">{row.value}</td>
+                  <td className="py-2 pr-3">
+                    <StatusBadge
+                      status={row.basis === "SOURCED" ? "pass" : row.basis === "DERIVED" ? "neutral" : "warn"}
+                    >
+                      {BASIS_LABEL[row.basis]}
+                    </StatusBadge>
+                  </td>
+                  <td className="py-2 pr-3 text-slate-400">{row.source}</td>
+                  <td className="py-2 pr-3 text-slate-400">{row.derivation}</td>
+                  <td className="py-2 text-slate-500 whitespace-nowrap">{row.lastReviewed}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p>
+          A judgement parameter is not a defect — every risk model has them. Presenting one as though it were sourced
+          would be. If you are evaluating whether to rely on a figure from this tool, read the judgement rows first:
+          they are where it could be most wrong.
+        </p>
+      </Section>
+
+      <Section id="governance" title="Model governance">
+        <p>
+          A figure that goes into a budget decision has to be defensible at a specific point in time. That means an
+          auditor can ask three questions and get answers: <em>which model produced this</em>, <em>can you produce it
+          again</em>, and <em>who put their name to it</em>.
+        </p>
+        <ul className="list-disc pl-5 space-y-1.5">
+          <li>
+            <strong>Engine version.</strong> Every persisted assessment, audit event and export carries{" "}
+            <Term>engineVersion</Term>, bumped whenever a change would move the numbers.
+          </li>
+          <li>
+            <strong>Seed.</strong> Every run draws from a seeded generator and stores its <Term>seed</Term>. The same
+            seed, engine version and trial count reproduce the figures exactly — not approximately.
+          </li>
+          <li>
+            <strong>Parameter-set hash.</strong> The scenario loss distributions, threat multipliers and the control
+            cap are hashed together into a short <Term>parameterSetHash</Term> stamped on every row. If that hash no
+            longer matches the live one, the assessment is marked as no longer re-derivable rather than quietly
+            recomputed against today&apos;s values. A hash cannot disagree with the data it was taken over, which is
+            why this is used in place of a mutable parameter table: the parameters themselves are source code, already
+            immutably versioned.
+          </li>
+          <li>
+            <strong>Sign-off.</strong> An assessment is <Term>DRAFT</Term> until an administrator approves it. Three
+            things block approval, and all three are enforced server-side: you cannot approve an assessment you ran
+            yourself, you cannot approve one twice, and you cannot approve one whose parameters have moved since it
+            ran. The approval is written into the hash-chained audit trail carrying the exact figures attested to, so
+            it binds numbers rather than a row ID.
+          </li>
+        </ul>
+        <p>
+          What this deliberately does <strong>not</strong> do: recover superseded parameters. If the hash no longer
+          matches, the tool says the assessment cannot be reproduced. That is a true and useful answer; silently
+          producing a different number would not be.
+        </p>
+      </Section>
+
+      <Section id="validation" title="Validation evidence">
+        <p>
+          Model validation asks whether there is evidence the model is right — not whether it looks right. Here is what
+          has been tested, and, more importantly, what has not.
+        </p>
+        <p className="font-medium text-slate-200">What is evidenced by automated tests</p>
+        <ul className="list-disc pl-5 space-y-1.5">
+          <li>
+            <strong>Reproducibility.</strong> The same seed reproduces a run exactly; different seeds differ by no more
+            than the reported sampling error.
+          </li>
+          <li>
+            <strong>Monotonicity.</strong> More control coverage never increases mean ALE. Adding a threat community
+            never decreases threat event frequency. The loss exceedance curve never rises.
+          </li>
+          <li>
+            <strong>Single estimator.</strong> The headline probability and the plotted curve come from one sorted
+            sample via one function, so the chart cannot disagree with the number beside it. Typing the displayed P90
+            into the tolerance box lands exactly on the 10% bar.
+          </li>
+          <li>
+            <strong>Reported error is real.</strong> Standard errors are positive, shrink as the square root of the
+            trial count, and match the closed binomial form for proportions. Displayed precision follows the standard
+            error rather than the float.
+          </li>
+          <li>
+            <strong>Generator quality.</strong> The seeded PRNG is uniform on [0, 1), matches the expected mean and
+            variance, and shows no short cycle over a long stream.
+          </li>
+          <li>
+            <strong>Insurance layer.</strong> Expected recovery matches the closed form for a uniform loss; a
+            full-cover layer recovers the whole expected loss; transfer never helps below the attachment point.
+          </li>
+          <li>
+            <strong>Tamper evidence.</strong> Altering, deleting or re-hashing any audit record breaks the chain at
+            that record.
+          </li>
+          <li>
+            <strong>Governance rules.</strong> The four approval refusals — not an approver, already approved, self
+            approval, parameters moved — are each tested directly, including that seniority does not waive
+            segregation of duties.
+          </li>
+        </ul>
+        <p className="font-medium text-slate-200">What is NOT validated</p>
+        <ul className="list-disc pl-5 space-y-1.5">
+          <li>
+            <strong>No back-testing against realised losses.</strong> Nothing here has been compared to what any
+            organisation actually lost. The engine is verified to compute the model correctly; the model is not
+            verified to describe reality.
+          </li>
+          <li>
+            <strong>Threat event frequency and vulnerability are unsourced.</strong> They are stated modelling
+            assumptions, not measurements, and they drive the frequency side of every figure.
+          </li>
+          <li>
+            <strong>No independent review.</strong> There is no second party who has re-derived these results. The
+            tests are written by the same author as the engine, which is verification, not validation.
+          </li>
+          <li>
+            <strong>No benchmark comparison.</strong> The outputs have not been placed alongside another FAIR
+            implementation on the same inputs.
+          </li>
+          <li>
+            <strong>The 70% control cap is asserted, not derived.</strong> It is documented as an assumption, and it is
+            inside the parameter hash so a change to it invalidates prior assessments — but nothing evidences the
+            number itself.
+          </li>
+        </ul>
+        <p>
+          Under SR 11-7 or comparable expectations, that second list is the gap between this and a model a validation
+          function would sign off. It is listed rather than omitted because a validation artefact that only records
+          successes is not one.
+        </p>
+      </Section>
+
+      <Section id="retention" title="Retention and erasure">
+        <p>
+          The audit trail is append-only and hash-chained, which is correct for integrity and sits in direct tension
+          with erasure rights under GDPR Art. 17, the UK DPA and CCPA. A risk owner&apos;s name is personal data, and
+          it used to be written into those immutable records.
+        </p>
+        <p>
+          The resolution is not to weaken the trail. Names are held in one owner directory and referenced everywhere
+          else by ID. Erasing a person tombstones that single row, which blanks the name across every risk and every
+          historical record at once &mdash; without rewriting a single audit event, so the chain still verifies. The
+          erasure is itself recorded as an <Term>ERASURE</Term> event naming who did it and how many risks were
+          affected, and deliberately <em>not</em> naming the person, because writing the name into the permanent
+          record as part of erasing it would defeat the purpose.
+        </p>
+        <div className="overflow-x-auto -mx-1">
+          <table className="w-full text-[13px] border-collapse">
+            <caption className="sr-only">Retention schedule by data type</caption>
+            <thead>
+              <tr className="text-left text-slate-400 border-b border-border">
+                <th scope="col" className="py-2 pr-3 font-medium">Data</th>
+                <th scope="col" className="py-2 pr-3 font-medium">Retention</th>
+                <th scope="col" className="py-2 font-medium">Basis</th>
+              </tr>
+            </thead>
+            <tbody>
+              {RETENTION_SCHEDULE.map((rule) => (
+                <tr key={rule.data} className="border-b border-white/5 align-top">
+                  <th scope="row" className="py-2 pr-3 font-medium text-slate-200 text-left">
+                    {rule.data}
+                  </th>
+                  <td className="py-2 pr-3 text-slate-300 whitespace-nowrap">{rule.period}</td>
+                  <td className="py-2 text-slate-400">{rule.basis}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+
       <Section id="limits" title="Assumptions and limitations">
         <p>The honest list. Each of these is a real constraint on how far these numbers should be pushed:</p>
         <ul className="list-disc pl-5 space-y-1.5">
@@ -258,6 +544,11 @@ export default function MethodologyPage() {
             matters more than the others does not get more weight.
           </li>
           <li>
+            <strong>Scope is measured by reference count, not by requirement weight.</strong> Mapping one NIST
+            subcategory out of 106 counts as 1/106 of scope regardless of how central that subcategory is. A weighted
+            model would be more accurate and much harder to defend, so the simple count is used and stated.
+          </li>
+          <li>
             <strong>The {Math.round(MAX_CONTROL_RISK_REDUCTION * 100)}% reduction cap is a judgement</strong>, chosen
             for defensibility rather than derived from data.
           </li>
@@ -266,8 +557,18 @@ export default function MethodologyPage() {
             headcount, migrations — not a smooth quadratic.
           </li>
           <li>
-            <strong>Monte Carlo output varies between runs.</strong> Each coverage point on the ROI sweep is an
-            independent simulation, so adjacent points carry sampling noise. Read the trend, not a single point.
+            <strong>Monte Carlo output varies between runs</strong>, and the interface now shows that variation rather
+            than hiding it. Points on the ROI sweep share one seed (common random numbers), so the noise largely
+            cancels in the differences between coverage levels — the only quantity that curve is read for. What
+            survives is reported as a <em>plateau</em>: a band of coverage levels statistically indistinguishable from
+            the peak, rather than a single optimum implying a precision the sweep does not have.
+          </li>
+          <li>
+            <strong>Separation tests are deliberately conservative.</strong> Where the tool compares two simulated
+            figures, it treats them as independent when estimating the error on their difference. Under common random
+            numbers they are positively correlated, so the true error is smaller and the tool will occasionally say
+            &ldquo;not measurable&rdquo; about a real effect. For a risk tool, over-stating uncertainty is the safe
+            direction to err.
           </li>
           <li>
             <strong>Nothing here is actuarial.</strong> The premium loading is illustrative. Use it to frame a
@@ -304,8 +605,15 @@ export default function MethodologyPage() {
             transferring the tail closes the gap, and at what premium.
           </li>
           <li>
-            <strong>Export</strong> — CSV for the working, PDF for the board pack. The PDF leads with a plain-language
-            verdict and keeps the technical detail in an appendix.
+            <strong>Export</strong> — from the Control Posture page only. The CSV carries the control catalogue with
+            its framework mappings and coverage provenance, plus the latest assessment&apos;s headline figures and its
+            full model provenance (engine version, parameter-set hash, seed, trial count, sign-off status). The PDF
+            carries the same, leading with a plain-language verdict and keeping the detail in an appendix.
+            <span className="block text-slate-500 mt-1">
+              What it does <em>not</em> yet include, stated because this page previously implied otherwise: the risk
+              register, the loss exceedance curve, and per-run working. Export is also not available from the
+              Dashboard, ROI or Risk Transfer pages.
+            </span>
           </li>
         </ol>
       </Section>

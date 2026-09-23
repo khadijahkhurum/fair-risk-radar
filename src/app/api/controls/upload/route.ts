@@ -5,10 +5,14 @@
 // frontend holds the parsed result in memory for that session only.
 import { NextRequest, NextResponse } from "next/server";
 import { parseCatalog, CatalogParseError } from "@/lib/catalog-parser";
+import { requireUser } from "@/lib/auth";
 
 const MAX_UPLOAD_BYTES = 512 * 1024; // 512KB — a control catalog is a few KB of text
 
 export async function POST(req: NextRequest) {
+  const auth = await requireUser("ANALYST");
+  if (!auth.ok) return auth.response;
+
   let formData: FormData;
   try {
     formData = await req.formData();

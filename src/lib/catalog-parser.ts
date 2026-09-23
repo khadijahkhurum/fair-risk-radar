@@ -5,7 +5,7 @@
 // would let one visitor overwrite what every other visitor sees. Parsing
 // stays server-side (reuses the already-installed js-yaml) and the result
 // is held in the browser for that session only.
-import { load } from "js-yaml";
+import { load, JSON_SCHEMA } from "js-yaml";
 
 export interface NormalizedControl {
   id: string;
@@ -81,7 +81,11 @@ function parseCsv(text: string): NormalizedControl[] {
 }
 
 function parseYaml(text: string): NormalizedControl[] {
-  const parsed = load(text);
+  // JSON_SCHEMA restricts the parser to plain JSON types — no custom tags, no
+  // implicit type resolution beyond JSON's (audit S9). js-yaml's default
+  // schema is already safe against code execution, but a restricted schema
+  // makes that a property of the call rather than of the library version.
+  const parsed = load(text, { schema: JSON_SCHEMA });
   if (!Array.isArray(parsed)) {
     throw new CatalogParseError("YAML catalog must be a top-level list of controls");
   }

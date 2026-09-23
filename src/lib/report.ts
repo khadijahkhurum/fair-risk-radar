@@ -1,6 +1,9 @@
 // Audit-evidence export: current control posture + latest risk assessment,
 // as CSV (for a spreadsheet-driven auditor) or PDF (for a signable artifact).
 import { PDFDocument, StandardFonts, rgb, type PDFPage, type PDFFont } from "pdf-lib";
+// S10: formula-injection neutralisation lives in csv.ts so it is testable
+// without dragging pdf-lib into the test run.
+import { csvRow } from "./csv";
 
 export interface ExportRow {
   controlId: string;
@@ -24,19 +27,40 @@ export interface AssessmentSummary {
   p90Ale: number;
   riskTolerance: number | null;
   pExceedTolerance: number | null;
-  generatedAt: Date;
+  /** When the SIMULATION ran — not when the file was produced (audit G6). */
+  assessmentRunAt: Date;
+  // Audit G4: the provenance an auditor needs to re-derive or challenge the
+  // figures above. Without these the export is a screenshot with a font.
+  seed: string;
+  trials: number;
+  engineVersion: string;
+  parameterSetVersion: string;
+  parameterSetHash: string;
+  commit: string | null;
+  /** Whether the parameter set that produced these figures is still in force. */
+  reproducible: boolean;
+  status: "DRAFT" | "APPROVED";
+  approvedByEmail: string | null;
+  approvedAt: Date | null;
 }
 
-function escapeCsvField(value: string | number): string {
-  const str = String(value);
-  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
-}
-
-function csvRow(fields: (string | number)[]): string {
-  return fields.map(escapeCsvField).join(",");
+/**
+ * The provenance block, shared by both formats so CSV and PDF cannot end up
+ * attesting to different things about the same assessment.
+ */
+function provenanceRows(a: AssessmentSummary): [string, string][] {
+  return [
+    ["Status", a.status === "APPROVED" ? "APPROVED" : "DRAFT — not signed off"],
+    ...(a.status === "APPROVED" && a.approvedByEmail
+      ? ([["Approved by", `${a.approvedByEmail} at ${a.approvedAt?.toISOString() ?? "unknown"}`]] as [string, string][])
+      : []),
+    ["Engine version", a.engineVersion],
+    ["Parameter set", `${a.parameterSetVersion} (${a.parameterSetHash})`],
+    ["Seed", a.seed],
+    ["Trials", String(a.trials)],
+    ["Reproducible against current parameters", a.reproducible ? "yes" : "NO — parameters have changed since this ran"],
+    ...(a.commit ? ([["Build commit", a.commit]] as [string, string][]) : []),
+  ];
 }
 
 export function buildCsvExport(rows: ExportRow[], assessment: AssessmentSummary | null): string {
@@ -47,7 +71,10 @@ export function buildCsvExport(rows: ExportRow[], assessment: AssessmentSummary 
     // an unescaped comment line is exactly what broke this before, since
     // Excel splits on every comma regardless of "#".
     lines.push(csvRow(["Scenario", assessment.scenarioName]));
-    lines.push(csvRow(["Generated", assessment.generatedAt.toISOString()]));
+    // G6: "Generated" conflated two facts — when the assessment ran, and when
+    // this file was produced. Both are needed, so both are named.
+    lines.push(csvRow(["Assessment run at", assessment.assessmentRunAt.toISOString()]));
+    lines.push(csvRow(["Exported at", new Date().toISOString()]));
     lines.push(csvRow(["Mean ALE (USD)", Math.round(assessment.meanAle)]));
     lines.push(csvRow(["P10 ALE (USD)", Math.round(assessment.p10Ale)]));
     lines.push(csvRow(["P50 ALE (USD)", Math.round(assessment.p50Ale)]));
@@ -57,6 +84,9 @@ export function buildCsvExport(rows: ExportRow[], assessment: AssessmentSummary 
     }
     if (assessment.pExceedTolerance !== null) {
       lines.push(csvRow(["P(loss > tolerance)", `${(assessment.pExceedTolerance * 100).toFixed(1)}%`]));
+    }
+    for (const [label, value] of provenanceRows(assessment)) {
+      lines.push(csvRow([label, value]));
     }
     lines.push("");
   }
@@ -172,7 +202,7 @@ export async function buildPdfExport(
       font,
       color: rgb(0.9, 0.9, 1),
     });
-    const generated = `Generated ${new Date().toISOString()}`;
+    const generated = `Exported ${new Date().toISOString()}`;
     page.drawText(generated, {
       x: PAGE_WIDTH - MARGIN - font.widthOfTextAtSize(generated, 8),
       y: PAGE_HEIGHT - 28,
@@ -280,6 +310,27 @@ export async function buildPdfExport(
       page!.drawText(tiles[i].value, { x: x + 6, y: tileTop - 30, size: 11, font: bold, color: tiles[i].color ?? INK });
     }
     y = tileTop - 40 - 24;
+
+    // Audit G4: model provenance, on the artefact that leaves the building.
+    // A board pack that states a dollar figure and cannot say which engine,
+    // which parameters or which seed produced it is not evidence of anything.
+    page!.drawText("Model provenance", { x: MARGIN, y, size: 10, font: bold, color: MUTED });
+    y -= 14;
+    for (const [label, value] of provenanceRows(assessment)) {
+      ensureSpace(14);
+      page!.drawText(`${label}:`, { x: MARGIN, y, size: 8, font: bold, color: MUTED });
+      page!.drawText(value, { x: MARGIN + 150, y, size: 8, font, color: INK });
+      y -= 12;
+    }
+    if (!assessment.reproducible) {
+      ensureSpace(16);
+      page!.drawText(
+        "This assessment cannot be re-derived: the model parameters have changed since it ran.",
+        { x: MARGIN, y, size: 8, font: bold, color: rgb(0.75, 0.16, 0.24) }
+      );
+      y -= 12;
+    }
+    y -= 12;
   }
 
   page!.drawText("Appendix: Control Posture (audit detail)", { x: MARGIN, y, size: 13, font: bold, color: INK });

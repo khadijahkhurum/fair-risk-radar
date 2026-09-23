@@ -19,17 +19,31 @@ const DEMO_STARTING_COVERAGE: Record<string, number> = {
 };
 
 async function main() {
-  const controls = await prisma.control.findMany();
-  for (const control of controls) {
-    await prisma.controlCoverage.create({
-      data: {
-        controlId: control.id,
-        coveragePct: DEMO_STARTING_COVERAGE[control.id] ?? 75,
-        source: "DEMO",
-      },
-    });
+  // Coverage is per organisation now (audit S2), so a reset is per
+  // organisation too — the control catalogue itself is still global.
+  const [controls, orgs] = await Promise.all([
+    prisma.control.findMany(),
+    prisma.organisation.findMany({ select: { id: true, slug: true } }),
+  ]);
+
+  if (orgs.length === 0) {
+    console.log("No organisations found. Run `npm run db:seed` first.");
+    return;
   }
-  console.log(`Reset coverage for ${controls.length} controls.`);
+
+  for (const org of orgs) {
+    for (const control of controls) {
+      await prisma.controlCoverage.create({
+        data: {
+          orgId: org.id,
+          controlId: control.id,
+          coveragePct: DEMO_STARTING_COVERAGE[control.id] ?? 75,
+          source: "DEMO",
+        },
+      });
+    }
+    console.log(`Reset coverage for ${controls.length} controls in "${org.slug}".`);
+  }
 }
 
 main()

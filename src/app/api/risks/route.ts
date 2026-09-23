@@ -2,25 +2,39 @@
 // POST /api/risks — create a new tracked risk.
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { scenarios } from "@/lib/scenarios";
-import { threats } from "@/lib/threats";
+import { parseBody, CreateRisk } from "@/lib/api-schemas";
+import { requireUser } from "@/lib/auth";
+import { recordAuditEvent } from "@/lib/audit";
+import { requiresJustification, ownerDisplayName } from "@/lib/risk-governance";
 
 // Read hits the live DB on every request. Without this, Next.js 14 treats a
 // no-arg GET route handler as static and bakes a build-time response into the
 // deployment — so manual coverage overrides never show up in production.
 export const dynamic = "force-dynamic";
 
-function isRating(n: unknown): n is number {
-  return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 5;
-}
-
 export async function GET() {
+  const auth = await requireUser();
+  if (!auth.ok) return auth.response;
+
   try {
+    // S4: this previously returned every organisation's register, including
+    // named accountable individuals, to anyone at all.
     const risks = await prisma.risk.findMany({
+      where: { orgId: auth.user.orgId },
       orderBy: { createdAt: "desc" },
-      include: { latestAssessment: true },
+      include: { latestAssessment: true, owner: true },
     });
-    return NextResponse.json({ risks });
+    // G8: the erased placeholder never leaves the server. G7: the client gets
+    // the model's suggestion alongside the stored score so it can show which
+    // is which, and whether a newer assessment has moved it.
+    return NextResponse.json({
+      risks: risks.map(({ owner, ...risk }) => ({
+        ...risk,
+        ownerId: owner.id,
+        ownerName: ownerDisplayName(owner),
+        ownerErased: owner.erasedAt !== null,
+      })),
+    });
   } catch (err) {
     console.error("GET /api/risks failed:", err);
     return NextResponse.json({ error: "Failed to load risk register" }, { status: 500 });
@@ -28,73 +42,106 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
-  }
+  const auth = await requireUser("ANALYST");
+  if (!auth.ok) return auth.response;
+  const { orgId } = auth.user;
 
+  const parsed = await parseBody(req, CreateRisk);
+  if (!parsed.ok) return parsed.response;
   const {
     title,
-    description,
+    description = "",
     ownerName,
     scenarioId,
-    threatIds,
-    riskTolerance,
+    threatIds = [],
+    riskTolerance = null,
     inherentLikelihood,
     inherentImpact,
     residualLikelihood,
     residualImpact,
-    latestAssessmentId,
-  } = (body ?? {}) as Record<string, unknown>;
+    latestAssessmentId = null,
+    suggestedInherentLikelihood = null,
+    suggestedInherentImpact = null,
+    suggestedResidualLikelihood = null,
+    suggestedResidualImpact = null,
+    overrideJustification = null,
+  } = parsed.data;
 
-  if (!title || typeof title !== "string") return NextResponse.json({ error: "title is required" }, { status: 400 });
-  if (!ownerName || typeof ownerName !== "string")
-    return NextResponse.json({ error: "ownerName is required" }, { status: 400 });
-  if (!scenarioId || typeof scenarioId !== "string" || !scenarios.find((s) => s.id === scenarioId)) {
-    return NextResponse.json({ error: "A valid scenarioId is required" }, { status: 400 });
-  }
-  const threatIdList = Array.isArray(threatIds) ? threatIds : [];
-  for (const id of threatIdList) {
-    if (!threats.find((t) => t.id === id)) {
-      return NextResponse.json({ error: `Unknown threatId "${id}"` }, { status: 400 });
-    }
-  }
-  for (const [label, value] of [
-    ["inherentLikelihood", inherentLikelihood],
-    ["inherentImpact", inherentImpact],
-    ["residualLikelihood", residualLikelihood],
-    ["residualImpact", residualImpact],
+  // G7: a score that diverges from the model needs a recorded reason, or the
+  // register is back to being an opinion beside a number. Checked here rather
+  // than in the schema because it is a cross-field rule the validator cannot
+  // express, and checked on the SERVER because a client-side prompt is a
+  // usability feature, not a control.
+  const suggestedInherent =
+    suggestedInherentLikelihood !== null && suggestedInherentImpact !== null
+      ? { likelihood: suggestedInherentLikelihood, impact: suggestedInherentImpact }
+      : null;
+  const suggestedResidual =
+    suggestedResidualLikelihood !== null && suggestedResidualImpact !== null
+      ? { likelihood: suggestedResidualLikelihood, impact: suggestedResidualImpact }
+      : null;
+
+  for (const [human, suggested, label] of [
+    [{ likelihood: inherentLikelihood, impact: inherentImpact }, suggestedInherent, "inherent rating"],
+    [{ likelihood: residualLikelihood, impact: residualImpact }, suggestedResidual, "residual rating"],
   ] as const) {
-    if (!isRating(value)) {
-      return NextResponse.json({ error: `${label} must be an integer 1-5` }, { status: 400 });
+    const check = requiresJustification(human, suggested, overrideJustification, label);
+    if (!check.ok) {
+      return NextResponse.json({ error: check.reason, code: "JUSTIFICATION_REQUIRED" }, { status: 422 });
     }
-  }
-  if (
-    riskTolerance !== undefined &&
-    riskTolerance !== null &&
-    (typeof riskTolerance !== "number" || riskTolerance < 0)
-  ) {
-    return NextResponse.json({ error: "riskTolerance must be a non-negative number" }, { status: 400 });
   }
 
   try {
+    // G8: the name is stored once, in the owner directory, and referenced from
+    // here. Upserted rather than created so re-entering the same owner does
+    // not fragment one person across several tombstones.
+    const owner = await prisma.riskOwner.upsert({
+      where: { orgId_displayName: { orgId, displayName: ownerName } },
+      update: {},
+      create: { orgId, displayName: ownerName },
+    });
+
     const risk = await prisma.risk.create({
       data: {
+        orgId,
         title,
-        description: typeof description === "string" ? description : "",
-        ownerName,
+        description,
+        ownerId: owner.id,
         scenarioId,
-        threatIds: threatIdList,
-        riskTolerance: (riskTolerance as number | null) ?? null,
-        inherentLikelihood: inherentLikelihood as number,
-        inherentImpact: inherentImpact as number,
-        residualLikelihood: residualLikelihood as number,
-        residualImpact: residualImpact as number,
-        latestAssessmentId: typeof latestAssessmentId === "string" ? latestAssessmentId : null,
+        threatIds,
+        riskTolerance,
+        inherentLikelihood,
+        inherentImpact,
+        residualLikelihood,
+        residualImpact,
+        latestAssessmentId,
+        suggestedInherentLikelihood,
+        suggestedInherentImpact,
+        suggestedResidualLikelihood,
+        suggestedResidualImpact,
+        overrideJustification,
+        suggestionsFromAssessmentId: latestAssessmentId,
       },
     });
+    await recordAuditEvent({
+      orgId,
+      actorId: auth.user.id,
+      actorEmail: auth.user.email,
+      actorRole: auth.user.role,
+      kind: "RISK",
+      detail: {
+        action: "created",
+        riskId: risk.id,
+        title: risk.title,
+        // G8: the ID, never the name. Embedding the name here is what made
+        // erasure impossible without rewriting a hash-chained record.
+        ownerId: risk.ownerId,
+        scenarioId: risk.scenarioId,
+        inherent: { likelihood: risk.inherentLikelihood, impact: risk.inherentImpact },
+        residual: { likelihood: risk.residualLikelihood, impact: risk.residualImpact },
+      },
+    });
+
     return NextResponse.json({ risk });
   } catch (err) {
     console.error("POST /api/risks failed:", err);

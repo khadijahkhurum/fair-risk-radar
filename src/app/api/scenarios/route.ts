@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { scenarios } from "@/lib/scenarios";
 import { threats } from "@/lib/threats";
 import { frameworks } from "@/lib/frameworks";
+import { requireUser } from "@/lib/auth";
 
 // Read hits the live DB on every request. Without this, Next.js 14 treats a
 // no-arg GET route handler as static and bakes a build-time response into the
@@ -13,10 +14,17 @@ import { frameworks } from "@/lib/frameworks";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const auth = await requireUser();
+  if (!auth.ok) return auth.response;
+  const { orgId } = auth.user;
+
   try {
+    // The control CATALOGUE is global — it is a set of definitions. Coverage
+    // is what this organisation claims about those definitions, so it is
+    // scoped (audit S2).
     const controls = await prisma.control.findMany({
       include: {
-        coverage: { orderBy: { recordedAt: "desc" }, take: 1 },
+        coverage: { where: { orgId }, orderBy: { recordedAt: "desc" }, take: 1 },
       },
       orderBy: { name: "asc" },
     });

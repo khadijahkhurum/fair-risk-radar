@@ -7,6 +7,106 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ── Identity and tenancy ────────────────────────────────────────────────────
+//
+// Audit S1 (no authentication) and S2 (single shared global tenant). Every
+// piece of data a customer produces is scoped to an Organisation; the control
+// CATALOGUE and the SCENARIO library are deliberately global, because they are
+// definitions shared by everyone, not customer data. What an organisation
+// actually claims about those controls — its coverage, its evidence, its risks,
+// its assessments — is tenant data and carries orgId.
+
+model Organisation {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  users     User[]
+}
+
+// Ordered least to most privileged; see ROLE_RANK in src/lib/roles.ts.
+enum Role {
+  VIEWER
+  ANALYST
+  CONTROL_OWNER
+  ADMIN
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  name         String
+  passwordHash String
+  role         Role         @default(VIEWER)
+  org          Organisation @relation(fields: [orgId], references: [id])
+  orgId        String
+  isDemo       Boolean      @default(false)
+  createdAt    DateTime     @default(now())
+  sessions     Session[]
+
+  // Audit G4. Two distinct relations because segregation of duties is the
+  // control: the schema has to be able to tell "ran it" from "signed it off",
+  // or the approval check has nothing to compare.
+  assessmentsRun      RiskAssessment[] @relation("AssessmentRunBy")
+  assessmentsApproved RiskAssessment[] @relation("AssessmentApprovedBy")
+
+  @@index([orgId])
+}
+
+// Opaque server-side sessions. Only the SHA-256 of the token is stored, so a
+// dump of this table yields no usable sessions, and deleting a row revokes
+// access immediately — neither is true of a self-contained signed token.
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+enum AuditKind {
+  SIMULATION
+  COVERAGE
+  EVIDENCE
+  RISK
+  AUTH
+  /// Assessment sign-off (audit G4) — who attested to which figures, and when.
+  APPROVAL
+  /// Erasure of a risk owner's name (audit G8). The act is recorded; the name
+  /// it removed is not, which is the entire point.
+  ERASURE
+}
+
+// The canonical audit trail (audit G1, S6).
+//
+// G1: 93 events existed with no actor field of any kind. actorId is NOT NULL
+// here — an unattributed event is not writable, which is the only way the
+// "audit-trailed" claim in the footer becomes true.
+//
+// S6: each row hashes (prevHash, orgId, actorId, kind, at, detail), so the
+// chain is verifiable and retrospective edits are detectable even by someone
+// with database access.
+//
+// detail is Json rather than a prose sentence: an auditor filters and
+// recomputes, and cannot do either against "Mean ALE $9,500,884".
+model AuditEvent {
+  id         String    @id @default(cuid())
+  orgId      String
+  actorId    String
+  actorEmail String
+  actorRole  Role
+  kind       AuditKind
+  at         DateTime  @default(now())
+  detail     Json
+  prevHash   String?
+  hash       String
+
+  @@index([orgId, at])
+}
+
 // Compliance-as-code control catalog, mirrored from controls/catalog.yaml.
 model Control {
   id          String   @id // slug from catalog.yaml, e.g. "mfa-enforcement"
@@ -32,6 +132,7 @@ model Control {
 // unlike the control-catalog upload this is safe to persist in a shared demo.
 model Evidence {
   id          String   @id @default(cuid())
+  orgId       String
   control     Control  @relation(fields: [controlId], references: [id])
   controlId   String
   filename    String
@@ -43,7 +144,7 @@ model Evidence {
 
   uploadedAt  DateTime @default(now())
 
-  @@index([controlId, uploadedAt])
+  @@index([orgId, controlId, uploadedAt])
 }
 
 // Coverage % is provenance-tagged: a number always says where it came from.
@@ -55,13 +156,14 @@ enum CoverageSource {
 
 model ControlCoverage {
   id          String         @id @default(cuid())
+  orgId       String
   control     Control        @relation(fields: [controlId], references: [id])
   controlId   String
   coveragePct Float // 0-100
   source      CoverageSource
   recordedAt  DateTime       @default(now())
 
-  @@index([controlId, recordedAt])
+  @@index([orgId, controlId, recordedAt])
 }
 
 // Industry loss-profile scenarios (IBM 2025-calibrated), seeded from scenarios.ts.
@@ -89,6 +191,7 @@ model Scenario {
 // Every simulation run is written here and never overwritten — the audit trail.
 model RiskAssessment {
   id               String   @id @default(cuid())
+  orgId            String
   scenario         Scenario @relation(fields: [scenarioId], references: [id])
   scenarioId       String
   threatIds        String[] @default([]) // empty = baseline scenario, no threat modifier applied
@@ -99,11 +202,47 @@ model RiskAssessment {
   p90Ale           Float
   riskTolerance    Float? // user-set $ threshold at time of run, if any
   pExceedTolerance Float? // P(annual loss > riskTolerance)
+
+  // Reproducibility metadata (audit M2, G4). A persisted assessment that
+  // cannot be re-derived cannot be defended: hand an auditor this row and the
+  // seed + engine version reproduce the exact figures.
+  seed                String @default("legacy-unseeded")
+  engineVersion       String @default("1.x")
+  parameterSetVersion String @default("unknown")
+  // Content hash of the exact scenario/threat/cap parameters the figures came
+  // from (audit G4). "unknown" on rows written before this existed, which is
+  // read as NOT reproducible — the parameters at the time were never recorded.
+  parameterSetHash    String @default("unknown")
+  // Sampling error on the figures above, so the UI can round to the precision
+  // it actually has rather than to the dollar.
+  seMeanAle           Float  @default(0)
+  sePExceedTolerance  Float?
+  toleranceForGreen   Float  @default(0)
   avgControlCoveragePct Float // control posture snapshot at time of run
   createdAt        DateTime @default(now())
   linkedRisks      Risk[]
 
-  @@index([scenarioId, createdAt])
+  // Sign-off (audit G4): what distinguishes a scratch run from an assessment
+  // somebody put their name to. Nullable runBy covers rows written before the
+  // column existed; those can never be approved, because segregation of
+  // duties cannot be evidenced for them.
+  status       AssessmentStatus @default(DRAFT)
+  runBy        User?            @relation("AssessmentRunBy", fields: [runById], references: [id])
+  runById      String?
+  approvedBy   User?            @relation("AssessmentApprovedBy", fields: [approvedById], references: [id])
+  approvedById String?
+  approvedAt   DateTime?
+  approvalNote String?
+
+  @@index([orgId, scenarioId, createdAt])
+  @@index([orgId, status])
+}
+
+enum AssessmentStatus {
+  /// Ran, persisted, audit-trailed — but nobody has attested to it.
+  DRAFT
+  /// Signed off by an administrator who did not run it, against parameters still in force.
+  APPROVED
 }
 
 enum RiskStatus {
@@ -118,11 +257,36 @@ enum RiskStatus {
 // the qualitative likelihood/impact before controls; residual is after —
 // the classic before/after pair a risk committee reviews. Suggested from a
 // FAIR run via /api/risks/suggest-ratings, always manually overridable.
+// Audit G8: a risk owner's name is personal data, and the audit trail that
+// records it is append-only by design. Append-only is correct; the gap was
+// that no lawful erasure path existed beside it.
+//
+// The name now lives HERE, once. Risks and audit events reference the id.
+// Tombstoning this row blanks the name across every risk and every historical
+// record simultaneously, without rewriting a single audit event — so the hash
+// chain stays valid and the erasure is itself an auditable act.
+model RiskOwner {
+  id          String    @id @default(cuid())
+  orgId       String
+  displayName String
+  /// Set on erasure. The row survives so historical references still resolve;
+  /// the name does not.
+  erasedAt    DateTime?
+  erasedById  String?
+  risks       Risk[]
+  createdAt   DateTime  @default(now())
+
+  @@unique([orgId, displayName])
+  @@index([orgId])
+}
+
 model Risk {
   id                  String          @id @default(cuid())
+  orgId               String
   title               String
   description         String
-  ownerName           String
+  owner               RiskOwner       @relation(fields: [ownerId], references: [id])
+  ownerId             String
   status              RiskStatus      @default(OPEN)
   scenarioId          String
   threatIds           String[]        @default([])
@@ -133,8 +297,23 @@ model Risk {
   residualImpact      Int // 1-5, after controls
   latestAssessmentId  String?
   latestAssessment    RiskAssessment? @relation(fields: [latestAssessmentId], references: [id])
+
+  // Audit G7. The model's proposal, kept beside the human's answer so the two
+  // can be compared. Without these, an edited score is indistinguishable from
+  // an agreed one, and nothing can notice when a later simulation moves the
+  // suggestion out from under a score somebody signed off months ago.
+  suggestedInherentLikelihood Int?
+  suggestedInherentImpact     Int?
+  suggestedResidualLikelihood Int?
+  suggestedResidualImpact     Int?
+  /// Required when a stored rating diverges from the suggestion above.
+  overrideJustification       String?
+  /// Which assessment produced the suggestions, so staleness is checkable.
+  suggestionsFromAssessmentId String?
+
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
 
-  @@index([status])
+  @@index([orgId, status])
+  @@index([ownerId])
 }

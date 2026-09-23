@@ -9,20 +9,117 @@
 // Everything below is derived from the Loss Exceedance Curve the simulation
 // already produces, so pricing a layer costs zero extra Monte Carlo runs.
 import { interpolateLec, type LecPoint } from "./lec";
+import { exceedanceProbability } from "./stats";
 
 export interface Layer {
   attachment: number; // retention / deductible
   limit: number; // most the policy will pay in a year
 }
 
-// Expected annual recovery from the layer.
-//
-// For a non-negative loss, E[min(max(L-A,0), Limit)] is the area under the
-// exceedance curve between A and A+Limit — the standard layer-pricing
-// identity, since E[(L-A)+] = ∫_A^∞ P(L > x) dx. Integrated with the
-// trapezoid rule over the LEC's own grid plus the two layer boundaries, so
-// the endpoints are exact rather than snapped to whichever grid point is
-// nearest.
+/**
+ * Expected annual recovery from the layer, computed directly from the raw
+ * sample (audit M8).
+ *
+ * E[min(max(L-A,0), Limit)] is the payout definition itself — averaged over
+ * the sampled years it needs no integration at all, and it is EXACT for the
+ * sample rather than an approximation of it.
+ *
+ * What this replaces, and why it mattered: the previous implementation
+ * integrated the exceedance curve with the trapezoid rule. That carried two
+ * undisclosed biases pushing in opposite directions, so they did not cancel
+ * predictably.
+ *
+ *  1. Trapezoids over a convex curve sit ABOVE it, systematically
+ *     overestimating the integral, the recovery and the loaded premium.
+ *  2. The curve stops at the largest simulated year, so every loss beyond the
+ *     worst of N sampled years contributed exactly zero — and an
+ *     excess-of-loss layer is entirely a tail instrument, so this understated
+ *     precisely the high-attachment layers people actually buy.
+ *
+ * Bias (1) is gone: this is not an approximation. Bias (2) is INHERENT to a
+ * finite sample, not to the method — no estimator can see beyond the sample's
+ * maximum. It is now surfaced instead of hidden, via `tailReliability` below.
+ */
+export function expectedRecoveryFromSample(
+  sortedLosses: readonly number[],
+  { attachment, limit }: Layer
+): number {
+  if (sortedLosses.length === 0 || limit <= 0) return 0;
+  const lo = Math.max(attachment, 0);
+  let sum = 0;
+  for (const loss of sortedLosses) sum += Math.min(Math.max(loss - lo, 0), limit);
+  return sum / sortedLosses.length;
+}
+
+/**
+ * How much of this layer the sample can actually speak to (audit M8).
+ *
+ * A layer whose attachment sits near or above the worst simulated year is
+ * priced almost entirely on years the simulation never produced, so the
+ * premium is an extrapolation dressed as a number. The honest response is to
+ * say so rather than to quietly return a confident near-zero.
+ *
+ * ponytail: no generalised Pareto fit for the far tail. A GPD needs a
+ * threshold choice and a shape parameter that would themselves need
+ * validating, and an unvalidated fitted tail is a worse lie than a stated
+ * limitation. Fit one when there is loss data to validate it against — the
+ * warning below is the honest interim.
+ */
+export interface TailReliability {
+  /** Years in the sample that reached the attachment at all. */
+  yearsAboveAttachment: number;
+  /** Largest year the simulation produced. */
+  maxSimulatedLoss: number;
+  /** Fraction of the layer's width the sample actually covers, 0..1. */
+  layerCoverage: number;
+  /** True when the price rests on too few sampled years to be meaningful. */
+  extrapolated: boolean;
+  warning: string | null;
+}
+
+/** Below this many exceedances the price is driven by a handful of draws. */
+const MIN_TAIL_YEARS = 20;
+
+export function tailReliability(
+  sortedLosses: readonly number[],
+  { attachment, limit }: Layer
+): TailReliability {
+  const maxSimulatedLoss = sortedLosses.length > 0 ? sortedLosses[sortedLosses.length - 1] : 0;
+  const lo = Math.max(attachment, 0);
+  let yearsAboveAttachment = 0;
+  for (const loss of sortedLosses) if (loss > lo) yearsAboveAttachment++;
+
+  const layerCoverage =
+    limit <= 0 ? 0 : Math.min(Math.max((maxSimulatedLoss - lo) / limit, 0), 1);
+
+  let warning: string | null = null;
+  if (lo >= maxSimulatedLoss) {
+    warning = `The attachment sits above the worst of ${sortedLosses.length.toLocaleString()} simulated years (${Math.round(
+      maxSimulatedLoss
+    ).toLocaleString()}). No simulated year reaches this layer, so its price is zero by construction rather than by evidence — treat it as unpriced, not cheap.`;
+  } else if (yearsAboveAttachment < MIN_TAIL_YEARS) {
+    warning = `Only ${yearsAboveAttachment} of ${sortedLosses.length.toLocaleString()} simulated years reach this attachment, so the price rests on a handful of draws and will move materially between runs. Raise the trial count or lower the attachment before quoting it.`;
+  } else if (layerCoverage < 1) {
+    warning = `The simulation's worst year only reaches ${Math.round(
+      layerCoverage * 100
+    )}% of the way through this layer, so the upper part of the limit is priced on no data at all. Expected recovery here is a lower bound.`;
+  }
+
+  return {
+    yearsAboveAttachment,
+    maxSimulatedLoss,
+    layerCoverage,
+    extrapolated: warning !== null,
+    warning,
+  };
+}
+
+/**
+ * @deprecated Curve-integrated pricing (audit M8). Kept only because removing
+ * it would silently change any caller that still reads it; every caller in
+ * this repo now uses expectedRecoveryFromSample. Delete once nothing imports
+ * it.
+ */
 export function expectedRecovery(lec: LecPoint[], { attachment, limit }: Layer): number {
   if (lec.length === 0 || limit <= 0) return 0;
   const lo = Math.max(attachment, 0);
@@ -62,6 +159,26 @@ export function retainedExceedProbability(
   if (limit <= 0) return interpolateLec(lec, tolerance);
   const threshold = tolerance < attachment ? tolerance : tolerance + limit;
   return interpolateLec(lec, threshold);
+}
+
+/**
+ * The same question answered from the raw sample (audit M8's inherited M1).
+ *
+ * The transfer page showed a gross figure taken from the raw sample beside a
+ * net figure taken from the interpolated curve, then reported the difference
+ * as the benefit of insurance. About a percentage point of that "benefit" was
+ * an artefact of using two different estimators. Both sides now come from the
+ * one sorted sample, so the improvement is the policy's and nothing else.
+ */
+export function retainedExceedProbabilityFromSample(
+  sortedLosses: readonly number[],
+  tolerance: number,
+  { attachment, limit }: Layer
+): number | null {
+  if (sortedLosses.length === 0) return null;
+  if (limit <= 0) return exceedanceProbability(sortedLosses, tolerance);
+  const threshold = tolerance < attachment ? tolerance : tolerance + limit;
+  return exceedanceProbability(sortedLosses, threshold);
 }
 
 // Insurers charge more than the expected payout — that margin covers their

@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/lib/fair.test.ts src/lib/risk-rating.test.ts src/lib/insurance.test.ts",
+    "test": "node --import tsx --test src/lib/fair.test.ts src/lib/risk-rating.test.ts src/lib/insurance.test.ts src/lib/validate.test.ts src/lib/password.test.ts src/lib/roles.test.ts src/lib/audit-hash.test.ts src/lib/rng.test.ts src/lib/stats.test.ts src/lib/coverage.test.ts src/lib/approval.test.ts src/lib/parameter-set.test.ts src/lib/rate-limit.test.ts src/lib/upload-guard.test.ts src/lib/csv.test.ts src/lib/slider-domain.test.ts src/lib/risk-governance.test.ts src/lib/audit-kinds.test.ts",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",

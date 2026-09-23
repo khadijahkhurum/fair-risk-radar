@@ -2,23 +2,21 @@
 // Body: { controlId: string, coveragePct: number }
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { parseBody, SetCoverage } from "@/lib/api-schemas";
+import { requireUser } from "@/lib/auth";
+import { recordAuditEvent } from "@/lib/audit";
 
 export async function PATCH(req: NextRequest) {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
-  }
+  // S5: coverage drives adjustedVulnerability in every simulation, the ROI
+  // optimum and the transfer verdict. It was anonymously writable. It is now
+  // the highest-privilege routine action in the product.
+  const auth = await requireUser("CONTROL_OWNER");
+  if (!auth.ok) return auth.response;
+  const { orgId } = auth.user;
 
-  const { controlId, coveragePct } = (body ?? {}) as { controlId?: string; coveragePct?: number };
-
-  if (!controlId || typeof controlId !== "string") {
-    return NextResponse.json({ error: "controlId is required" }, { status: 400 });
-  }
-  if (typeof coveragePct !== "number" || Number.isNaN(coveragePct) || coveragePct < 0 || coveragePct > 100) {
-    return NextResponse.json({ error: "coveragePct must be a number between 0 and 100" }, { status: 400 });
-  }
+  const parsed = await parseBody(req, SetCoverage);
+  if (!parsed.ok) return parsed.response;
+  const { controlId, coveragePct } = parsed.data;
 
   try {
     const control = await prisma.control.findUnique({ where: { id: controlId } });
@@ -26,8 +24,31 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: `Unknown controlId "${controlId}"` }, { status: 404 });
     }
 
+    const previous = await prisma.controlCoverage.findFirst({
+      where: { orgId, controlId },
+      orderBy: { recordedAt: "desc" },
+      select: { coveragePct: true },
+    });
+
     const coverage = await prisma.controlCoverage.create({
-      data: { controlId, coveragePct, source: "MANUAL" },
+      data: { orgId, controlId, coveragePct, source: "MANUAL" },
+    });
+
+    // "Who changed this control's coverage from 40% to 90%, when, and on what
+    // authority" is the first question in any SOC 2 walkthrough (audit G1).
+    await recordAuditEvent({
+      orgId,
+      actorId: auth.user.id,
+      actorEmail: auth.user.email,
+      actorRole: auth.user.role,
+      kind: "COVERAGE",
+      detail: {
+        controlId,
+        controlName: control.name,
+        from: previous?.coveragePct ?? null,
+        to: coveragePct,
+        source: "MANUAL",
+      },
     });
 
     return NextResponse.json({ coverage });

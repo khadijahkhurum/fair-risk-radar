@@ -14,10 +14,16 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ChartConfiguration } from "chart.js";
 import { AppShell } from "@/components/AppShell";
-import { ChartCanvas } from "@/components/ChartCanvas";
+import { ChartCanvas, type ChartSpec } from "@/components/ChartCanvas";
+import { StatusBadge } from "@/components/StatusBadge";
+import { formatPercent, GREEN_THRESHOLD as TARGET_EXCEED_PROBABILITY } from "@/lib/stats";
+// E3: the green threshold lives in src/lib/stats.ts, where the engine reads it
+// too — aliased rather than redeclared, so the page and the simulation cannot
+// drift apart about what "within appetite" means.
 import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { SelectDropdown } from "@/components/SelectDropdown";
 import { toleranceForTargetProbability, type LecPoint } from "@/lib/lec";
+import { newSeed } from "@/lib/rng";
 
 interface Scenario {
   id: string;
@@ -39,18 +45,28 @@ interface CurvePoint {
   riskAvoided: number;
   netBenefit: number;
   benefitCostRatio: number | null;
+  /** Sampling error on this point's net benefit — the width of the plateau (M3c). */
+  netBenefitSe: number;
   lec: LecPoint[];
 }
 
 const COVERAGE_STEPS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+// Every point in a sweep uses this trial count and ONE shared seed, so the
+// points are comparable to each other rather than each being an independent
+// draw (M3a).
+const SWEEP_TRIALS = 4000;
 // Same 10% bar the Risk Simulator's green/red rule uses — one constant so the
 // two pages can't disagree about what "within tolerance" means.
-const TARGET_EXCEED_PROBABILITY = 0.1;
+
 
 const currency = (v: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 }).format(v);
 const currencyFull = (v: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
+
+// M12: one precision policy, in stats.ts, for every surface.
+const pctLabel = (p: number | null) => formatPercent(p);
+const withinTolerance = (p: number | null) => p !== null && p <= TARGET_EXCEED_PROBABILITY;
 
 export default function RoiPage() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
@@ -72,6 +88,9 @@ export default function RoiPage() {
   // seconds and the old chart otherwise just sits there with no visible
   // sign anything is happening.
   const [refreshNonce, setRefreshNonce] = useState(0);
+  // One seed shared by every point of a sweep. Recalculate mints a new one,
+  // so "run it again" genuinely resamples rather than replaying the same draw.
+  const [sweepSeed, setSweepSeed] = useState(() => newSeed());
 
   // Re-read today's actual coverage whenever this tab becomes active again.
   // Coverage is edited on another page (often in another tab), and a figure
@@ -143,17 +162,38 @@ export default function RoiPage() {
             const res = await fetch("/api/risk/whatif", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ scenarioId, threatIds, riskTolerance: tolerance, coveragePct: coverage }),
+              body: JSON.stringify({
+                scenarioId,
+                threatIds,
+                riskTolerance: tolerance,
+                coveragePct: coverage,
+                // M3a — COMMON RANDOM NUMBERS. Every point in the sweep is
+                // evaluated on the SAME sampled years, so the noise is shared
+                // and cancels in the differences between coverage levels,
+                // which is the only thing this curve is read for. Previously
+                // each point was an independent simulation and the argmax
+                // picked whichever level drew the most favourable noise —
+                // producing two different budget recommendations from
+                // identical inputs twenty minutes apart.
+                seed: sweepSeed,
+                trials: SWEEP_TRIALS,
+              }),
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error ?? "Simulation failed");
             return {
               coverage,
-              result: data.result as { meanAle: number; pExceedTolerance: number | null; lec: LecPoint[] },
+              result: data.result as {
+                meanAle: number;
+                pExceedTolerance: number | null;
+                lec: LecPoint[];
+                seMeanAle: number;
+              },
             };
           })
         );
-        const baselineAle = results.find((r) => r.coverage === 0)!.result.meanAle;
+        const baseline = results.find((r) => r.coverage === 0)!.result;
+        const baselineAle = baseline.meanAle;
         const points: CurvePoint[] = results.map(({ coverage, result }) => {
           // Cost scales with the SQUARE of coverage, not linearly: the first
           // half of coverage is the cheap, high-leverage fixes (MFA, patch
@@ -172,6 +212,11 @@ export default function RoiPage() {
           // one. A ratio like "225x" or "$225 per $1" is the way this kind
           // of extreme return is actually presented in security economics.
           const benefitCostRatio = cost > 0 ? riskAvoided / cost : null;
+          // Conservative: treats the two means as independent, which they are
+          // not under common random numbers, so the plateau comes out wider
+          // than the truth. For a risk tool, over-stating uncertainty is the
+          // safe direction to err.
+          const netBenefitSe = Math.sqrt(baseline.seMeanAle ** 2 + result.seMeanAle ** 2);
           return {
             coverage,
             meanAle: result.meanAle,
@@ -180,6 +225,7 @@ export default function RoiPage() {
             riskAvoided,
             netBenefit,
             benefitCostRatio,
+            netBenefitSe,
             lec: result.lec ?? [],
           };
         });
@@ -191,12 +237,36 @@ export default function RoiPage() {
       }
     }, 400);
     return () => clearTimeout(handle);
-  }, [scenarioId, threatIds, riskTolerance, costAt100, coverageSteps, refreshNonce]);
+  }, [scenarioId, threatIds, riskTolerance, costAt100, coverageSteps, refreshNonce, sweepSeed]);
 
   const optimalPoint = useMemo(() => {
     if (curve.length === 0) return null;
     return curve.reduce((best, p) => (p.netBenefit > best.netBenefit ? p : best), curve[0]);
   }, [curve]);
+
+  // M3c — the PLATEAU: every coverage level whose net benefit is within one
+  // standard error of the peak. Reporting a single argmax point implies a
+  // precision the sweep does not have; the honest answer is a band, and the
+  // choice inside that band is an operational one rather than a statistical
+  // one.
+  //
+  // ponytail: no curve fitting. Common random numbers already removed the
+  // independent-noise problem that made the argmax unstable, and a monotone
+  // spline would add a dependency and a second model to defend for a sweep
+  // that is 12 points wide. Fit it if the sweep ever gets fine enough that
+  // the grid, rather than the noise, is the limiting factor.
+  const plateau = useMemo(() => {
+    if (!optimalPoint || curve.length === 0) return null;
+    const floor = optimalPoint.netBenefit - optimalPoint.netBenefitSe;
+    const inBand = curve.filter((p) => p.netBenefit >= floor);
+    if (inBand.length === 0) return null;
+    const low = Math.min(...inBand.map((p) => p.coverage));
+    const high = Math.max(...inBand.map((p) => p.coverage));
+    return { low, high, isPoint: low === high, band: inBand };
+  }, [curve, optimalPoint]);
+
+  const withinPlateau = (coverage: number | null) =>
+    coverage !== null && plateau !== null && coverage >= plateau.low && coverage <= plateau.high;
 
   const currentPoint = useMemo(() => {
     if (currentCoveragePct === null) return null;
@@ -271,17 +341,18 @@ export default function RoiPage() {
     () => (fullCoveragePoint ? toleranceForTargetProbability(fullCoveragePoint.lec, TARGET_EXCEED_PROBABILITY) : null),
     [fullCoveragePoint]
   );
-  const pctLabel = (p: number | null) => (p === null ? "—" : `${(p * 100).toFixed(2)}%`);
-  const withinTolerance = (p: number | null) => p !== null && p <= TARGET_EXCEED_PROBABILITY;
 
-  const lossVsCostConfig: ChartConfiguration<"line"> | null = useMemo(() => {
+  // Audit A1: each sweep chart carries its own summary and data table,
+  // derived in the same memo from the same curve — a screen-reader user gets
+  // the numbers the chart is drawn from, not the word "chart".
+  const lossVsCostChart = useMemo<ChartSpec | null>(() => {
     if (curve.length === 0) return null;
     // Highlight whichever point is today's real coverage — bigger, amber —
     // so the curve reads against reality, not just as an abstract sweep.
     const pointStyle = (color: string) =>
       curve.map((p) => (p.coverage === currentCoveragePct ? "#ff9f0a" : color));
     const pointSize = curve.map((p) => (p.coverage === currentCoveragePct ? 6 : 3));
-    return {
+    const config: ChartConfiguration<"line"> = {
       type: "line",
       data: {
         labels: curve.map((p) => `${p.coverage}%`),
@@ -322,11 +393,34 @@ export default function RoiPage() {
         plugins: { legend: { labels: { color: "#d1d1d6" } } },
       },
     };
-  }, [curve, currentCoveragePct]);
-
-  const netBenefitConfig: ChartConfiguration<"bar"> | null = useMemo(() => {
-    if (curve.length === 0) return null;
+    const lo = curve[0];
+    const hi = curve[curve.length - 1];
     return {
+      config,
+      summary:
+        `Expected annual loss and cumulative control cost against control coverage, ` +
+        `swept from ${lo.coverage}% to ${hi.coverage}%. ` +
+        `Expected loss falls from ${currencyFull(lo.meanAle)} to ${currencyFull(hi.meanAle)} ` +
+        `while control cost rises from ${currencyFull(lo.cost)} to ${currencyFull(hi.cost)}.` +
+        (currentPoint
+          ? ` Today's coverage is ${currentPoint.coverage}%, at ${currencyFull(currentPoint.meanAle)} expected loss for ${currencyFull(currentPoint.cost)} of spend.`
+          : ""),
+      table: {
+        caption: "Expected annual loss and control cost at each coverage level",
+        head: ["Control coverage", "Expected annual loss", "Cumulative control cost", "Today's coverage"],
+        rows: curve.map((p) => [
+          `${p.coverage}%`,
+          currencyFull(p.meanAle),
+          currencyFull(p.cost),
+          p.coverage === currentCoveragePct ? "yes" : "no",
+        ]),
+      },
+    };
+  }, [curve, currentCoveragePct, currentPoint]);
+
+  const netBenefitChart = useMemo<ChartSpec | null>(() => {
+    if (curve.length === 0) return null;
+    const config: ChartConfiguration<"bar"> = {
       type: "bar",
       data: {
         labels: curve.map((p) => `${p.coverage}%`),
@@ -355,16 +449,42 @@ export default function RoiPage() {
         plugins: { legend: { display: false } },
       },
     };
-  }, [curve, optimalPoint]);
+    return {
+      config,
+      summary:
+        `Net benefit (loss avoided minus control cost) at each coverage level. ` +
+        (optimalPoint
+          ? `Net benefit peaks at ${currencyFull(optimalPoint.netBenefit)} at ${optimalPoint.coverage}% coverage` +
+            (plateau && !plateau.isPoint
+              ? `, though every level from ${plateau.low}% to ${plateau.high}% is within the sampling error of that peak.`
+              : ".")
+          : "") +
+        (currentPoint
+          ? ` Today's ${currentPoint.coverage}% coverage returns ${currencyFull(currentPoint.netBenefit)}.`
+          : ""),
+      table: {
+        caption: "Net benefit at each coverage level, with sampling error",
+        head: ["Control coverage", "Loss avoided", "Control cost", "Net benefit", "Sampling error (±)", "Within the peak band"],
+        rows: curve.map((p) => [
+          `${p.coverage}%`,
+          currencyFull(p.riskAvoided),
+          currencyFull(p.cost),
+          currencyFull(p.netBenefit),
+          currencyFull(p.netBenefitSe),
+          plateau && p.coverage >= plateau.low && p.coverage <= plateau.high ? "yes" : "no",
+        ]),
+      },
+    };
+  }, [curve, optimalPoint, currentCoveragePct, currentPoint, plateau]);
 
-  const exceedanceConfig: ChartConfiguration<"line"> | null = useMemo(() => {
+  const exceedanceChart = useMemo<ChartSpec | null>(() => {
     if (curve.length === 0 || !toleranceSet) return null;
     // Between entering a tolerance and the debounced sweep finishing, `curve`
     // still holds the previous run — whose pExceedTolerance is all null.
     // Rendering that draws an empty chart with just the appetite line, which
     // looks broken. Wait for real data instead.
     if (curve.every((p) => p.pExceedTolerance === null)) return null;
-    return {
+    const config: ChartConfiguration<"line"> = {
       type: "line",
       data: {
         labels: curve.map((p) => `${p.coverage}%`),
@@ -401,6 +521,32 @@ export default function RoiPage() {
           },
         },
         plugins: { legend: { labels: { color: "#d1d1d6" } } },
+      },
+    };
+    const bar = (TARGET_EXCEED_PROBABILITY * 100).toFixed(0);
+    const firstGreen = curve.find((p) => withinTolerance(p.pExceedTolerance)) ?? null;
+    return {
+      config,
+      summary:
+        `Probability that annual loss exceeds the stated risk tolerance, at each control coverage level, ` +
+        `against a ${bar}% risk-appetite bar. ` +
+        (firstGreen
+          ? `${firstGreen.coverage}% coverage is the first level that comes in under the bar, at ${pctLabel(firstGreen.pExceedTolerance)}.`
+          : `No coverage level in this sweep comes in under the bar — the lowest is ${pctLabel(
+              curve.reduce<number | null>(
+                (lowest, p) =>
+                  p.pExceedTolerance === null ? lowest : lowest === null || p.pExceedTolerance < lowest ? p.pExceedTolerance : lowest,
+                null
+              )
+            )}.`),
+      table: {
+        caption: `Probability of exceeding the risk tolerance at each coverage level, against a ${bar}% appetite bar`,
+        head: ["Control coverage", "P(loss > tolerance)", `Under the ${bar}% bar`],
+        rows: curve.map((p) => [
+          `${p.coverage}%`,
+          pctLabel(p.pExceedTolerance),
+          p.pExceedTolerance === null ? "not computed" : withinTolerance(p.pExceedTolerance) ? "yes" : "no",
+        ]),
       },
     };
   }, [curve, currentCoveragePct, toleranceSet]);
@@ -483,6 +629,7 @@ export default function RoiPage() {
                   }
                 })
                 .catch(() => {});
+              setSweepSeed(newSeed());
               setRefreshNonce((n) => n + 1);
             }}
             disabled={loading || !scenarioId}
@@ -599,7 +746,10 @@ export default function RoiPage() {
                   }`}
                 >
                   {pctLabel(currentPoint.pExceedTolerance)}
-                </span>
+                </span>{" "}
+                <StatusBadge status={withinTolerance(currentPoint.pExceedTolerance) ? "pass" : "fail"}>
+                  {withinTolerance(currentPoint.pExceedTolerance) ? "Within appetite" : "Above appetite"}
+                </StatusBadge>
               </span>
             )}
           </div>
@@ -611,9 +761,11 @@ export default function RoiPage() {
               ? `Closing the gap to the ${optimalPoint.coverage}% optimum would add another ${currencyFull(
                   optimalPoint.netBenefit - currentPoint.netBenefit
                 )}/year in net benefit.`
-              : `At the cost you entered, the model puts the best return BELOW today's coverage (${optimalPoint.coverage}%) — meaning it thinks you are over-spending by ${currencyFull(
+              : withinPlateau(currentPoint.coverage)
+              ? `Today's coverage is inside the statistical plateau (${plateau?.low}–${plateau?.high}%), so the model cannot distinguish it from the optimum. There is no measurable case for changing coverage either way at this cost estimate.`
+              : `At the cost you entered, the model puts the best return BELOW today's coverage (${optimalPoint.coverage}%) — by ${currencyFull(
                   optimalPoint.netBenefit - currentPoint.netBenefit
-                )}/year. Treat that as a flag on the cost estimate, not as advice to remove controls: stripping out controls you already run is rarely the real answer, and coverage you have already paid for is a sunk cost this model does not know about.`}
+                )}/year, which is outside the sampling noise. Treat that as a flag on the cost estimate, not as advice to remove controls: "spend less on security" needs a far higher evidential bar than "spend more", stripping out controls you already run is rarely the real answer, and coverage you have already paid for is a sunk cost this model does not know about.`}
           </p>
         </div>
       )}
@@ -632,7 +784,11 @@ export default function RoiPage() {
             Optimal investment point{toleranceSet && !withinTolerance(optimalPoint.pExceedTolerance) ? " (best ROI — still outside risk appetite)" : ""}
           </div>
           <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
-            <span className="text-xl font-mono font-semibold text-slate-100">{optimalPoint.coverage}% control coverage</span>
+            <span className="text-xl font-mono font-semibold text-slate-100">
+              {plateau && !plateau.isPoint
+                ? `${plateau.low}–${plateau.high}% control coverage`
+                : `${optimalPoint.coverage}% control coverage`}
+            </span>
             {toleranceSet && (
               <span className="text-sm text-slate-400">
                 P(loss &gt; tolerance):{" "}
@@ -642,10 +798,24 @@ export default function RoiPage() {
                   }`}
                 >
                   {pctLabel(optimalPoint.pExceedTolerance)}
-                </span>
+                </span>{" "}
+                <StatusBadge status={withinTolerance(optimalPoint.pExceedTolerance) ? "pass" : "fail"}>
+                  {withinTolerance(optimalPoint.pExceedTolerance) ? "Within appetite" : "Above appetite"}
+                </StatusBadge>
               </span>
             )}
           </div>
+          {plateau && !plateau.isPoint && (
+            <p className="text-sm text-slate-400 mt-2">
+              Net benefit peaks at {currencyFull(optimalPoint.netBenefit)} ± {currencyFull(optimalPoint.netBenefitSe)}
+              /year. Every level between{" "}
+              <span className="font-mono text-slate-200">
+                {plateau.low}% and {plateau.high}%
+              </span>{" "}
+              is within one standard error of that peak — they are statistically indistinguishable, so choose inside
+              the band on operational grounds, not on this number.
+            </p>
+          )}
           <p className="text-sm text-slate-400 mt-2">
             Net benefit peaks here at {currencyFull(optimalPoint.netBenefit)}/year — {currencyFull(optimalPoint.riskAvoided)}{" "}
             in avoided loss against {currencyFull(optimalPoint.cost)} in control spend
@@ -688,7 +858,7 @@ export default function RoiPage() {
         </div>
       )}
 
-      {exceedanceConfig && (
+      {exceedanceChart && (
         <div className="rounded-xl border border-border bg-surface p-5 mb-6">
           <h3 className="font-semibold text-slate-100 mb-1">Probability of exceeding risk tolerance, by coverage level</h3>
           <p className="text-xs text-slate-500 mb-3">
@@ -696,7 +866,7 @@ export default function RoiPage() {
             curve stays above the green line, no level of control investment gets you there. Amber point is today.
           </p>
           <div className={`h-72 transition-opacity ${loading ? "opacity-40" : "opacity-100"}`}>
-            <ChartCanvas config={exceedanceConfig} />
+            <ChartCanvas {...exceedanceChart} />
           </div>
         </div>
       )}
@@ -709,7 +879,7 @@ export default function RoiPage() {
             actual coverage.
           </p>
           <div className={`h-72 transition-opacity ${loading ? "opacity-40" : "opacity-100"}`}>
-            {lossVsCostConfig ? <ChartCanvas config={lossVsCostConfig} /> : <p className="text-sm text-slate-500">{loading ? "Simulating…" : "Pick a scenario to begin."}</p>}
+            {lossVsCostChart ? <ChartCanvas {...lossVsCostChart} /> : <p className="text-sm text-slate-500">{loading ? "Simulating…" : "Pick a scenario to begin."}</p>}
           </div>
         </div>
         <div className="rounded-xl border border-border bg-surface p-5">
@@ -718,7 +888,7 @@ export default function RoiPage() {
             Green bar is the optimum; amber is today&apos;s actual coverage (if different).
           </p>
           <div className={`h-72 transition-opacity ${loading ? "opacity-40" : "opacity-100"}`}>
-            {netBenefitConfig ? <ChartCanvas config={netBenefitConfig} /> : <p className="text-sm text-slate-500">{loading ? "Simulating…" : "Pick a scenario to begin."}</p>}
+            {netBenefitChart ? <ChartCanvas {...netBenefitChart} /> : <p className="text-sm text-slate-500">{loading ? "Simulating…" : "Pick a scenario to begin."}</p>}
           </div>
         </div>
       </div>

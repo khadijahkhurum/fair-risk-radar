@@ -2,10 +2,22 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChartConfiguration } from "chart.js";
-import { ChartCanvas } from "./ChartCanvas";
+import { ChartCanvas, type ChartSpec } from "./ChartCanvas";
 import { MultiSelectDropdown } from "./MultiSelectDropdown";
 import { SelectDropdown } from "./SelectDropdown";
-import { interpolateLec, toleranceForTargetProbability } from "@/lib/lec";
+import { StatusBadge } from "./StatusBadge";
+import { AssessmentGovernance, type Viewer } from "./AssessmentGovernance";
+import {
+  exceedanceProbability,
+  formatPercent,
+  formatPercentWithError,
+  standardErrorOfProportion,
+  separated,
+  // E3: one definition of the green threshold, shared with the engine.
+  GREEN_THRESHOLD as TARGET_EXCEED_PROBABILITY,
+} from "@/lib/stats";
+import { DEFAULT_TRIALS } from "@/lib/fair";
+import { toleranceSliderDomain } from "@/lib/slider-domain";
 
 interface Scenario {
   id: string;
@@ -36,6 +48,8 @@ interface LecPoint {
 }
 interface FairResult {
   trials: number;
+  seed: string;
+  engineVersion: string;
   meanAle: number;
   p10Ale: number;
   p50Ale: number;
@@ -44,12 +58,30 @@ interface FairResult {
   adjustedVulnerability: number;
   histogram: HistogramBucket[];
   lec: LecPoint[];
+  /** Present on a persisted run; omitted from the high-frequency what-if endpoint. */
+  sortedLosses?: number[];
   pExceedTolerance: number | null;
+  toleranceForGreen: number;
+  seMeanAle: number;
+  sePExceedTolerance: number | null;
 }
 interface HistoryItem {
   id: string;
   meanAle: number;
   createdAt: string;
+  // Model governance (audit G4). These travel with every persisted row so the
+  // page can say what produced a figure and whether it still can.
+  status: "DRAFT" | "APPROVED";
+  seed: string;
+  trials: number;
+  engineVersion: string;
+  parameterSetVersion: string;
+  parameterSetHash: string;
+  reproducible: boolean;
+  runBy: { email: string } | null;
+  approvedBy: { email: string } | null;
+  approvedAt: string | null;
+  approvalNote: string | null;
 }
 interface Run {
   id: string;
@@ -71,43 +103,64 @@ const MAX_TOLERANCE = 1_000_000_000_000; // $1T/year — already absurd for any 
 // the seeded tolerance onto a value the slider can actually represent, so
 // the number box and slider thumb agree from the very first paint instead
 // of the browser silently snapping the thumb to a different number.
-const DEFAULT_TOLERANCE_STEP = Math.max(1, Math.round(DEFAULT_TOLERANCE_MAX / 500));
+// E3: was Math.max(1, Math.round(DEFAULT_TOLERANCE_MAX / 500)) — a rounding of
+// a value already integral. Derived from the one place that defines a step,
+// so the seeded tolerance always lands exactly on a slider position.
+const DEFAULT_TOLERANCE_STEP = toleranceSliderDomain(null, DEFAULT_TOLERANCE_MAX).step;
 // Same 10% bar the stat card's red/green accent already uses — kept as one
 // constant so the "required tolerance" readout and the what-if panel agree.
-const TARGET_EXCEED_PROBABILITY = 0.1;
 
 const currency = (v: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 }).format(v);
 const currencyFull = (v: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
 
-// Risk-tolerance traffic light: a threshold under $300K reads as a
-// conservative/low risk appetite, up to $2M as moderate, above as high.
-// Bands are arbitrary judgment calls, not a standard — adjust to taste.
-const TOLERANCE_LOW_MAX = 300_000;
-const TOLERANCE_MODERATE_MAX = 2_000_000;
-type ToleranceBand = "none" | "low" | "moderate" | "high";
-function bandForTolerance(value: number | null): ToleranceBand {
+// Risk-appetite label, expressed RELATIVE to the modelled mean ALE (audit M9).
+//
+// This used to be fixed dollar bands: under $300K "low", under $2M "moderate",
+// above "high" — regardless of scenario, sector or balance sheet. For a bank
+// with a modelled mean ALE of $7.4M, a $2M annual tolerance was labelled
+// "High risk appetite" when it is in fact extremely conservative. The label
+// did not merely lack context; it said the opposite of the truth.
+//
+// Risk appetite is an organisational statement, not an absolute dollar amount.
+// The Methodology page already says exactly this about the 10% bar. The same
+// reasoning applies here: what matters is the tolerance against the loss the
+// organisation is actually modelled to carry.
+//
+// ponytail: ratio thresholds still hardcoded, just no longer meaningless.
+// They belong in org configuration alongside the green threshold — move them
+// there when an org can configure anything at all.
+const APPETITE_CONSERVATIVE_MAX = 0.5;
+const APPETITE_MODERATE_MAX = 1.5;
+type ToleranceBand = "none" | "conservative" | "moderate" | "high";
+
+function bandForTolerance(value: number | null, meanAle: number | null): ToleranceBand {
   if (value === null) return "none";
-  if (value < TOLERANCE_LOW_MAX) return "low";
-  if (value < TOLERANCE_MODERATE_MAX) return "moderate";
+  // Without a run there is nothing to be relative TO. Saying nothing beats
+  // falling back to the absolute bands this exists to remove.
+  if (meanAle === null || meanAle <= 0) return "none";
+  const ratio = value / meanAle;
+  if (ratio < APPETITE_CONSERVATIVE_MAX) return "conservative";
+  if (ratio < APPETITE_MODERATE_MAX) return "moderate";
   return "high";
 }
+
 const TOLERANCE_BAND_LABEL: Record<ToleranceBand, string> = {
   none: "",
-  low: "Low risk appetite",
-  moderate: "Moderate risk appetite",
-  high: "High risk appetite",
+  conservative: "Conservative appetite",
+  moderate: "Moderate appetite",
+  high: "High appetite",
 };
 const TOLERANCE_BAND_TEXT: Record<ToleranceBand, string> = {
   none: "",
-  low: "text-emerald-400",
+  conservative: "text-emerald-400",
   moderate: "text-amber-400",
   high: "text-risk",
 };
 const TOLERANCE_BAND_BORDER: Record<ToleranceBand, string> = {
   none: "border-border",
-  low: "border-emerald-500/60",
+  conservative: "border-emerald-500/60",
   moderate: "border-amber-500/60",
   high: "border-risk/60",
 };
@@ -126,7 +179,20 @@ export function Dashboard() {
 
   const [runs, setRuns] = useState<Run[]>([]);
   const [running, setRunning] = useState(false);
+  // P2: first paint showed an empty scenario select, an empty tolerance box
+  // and no charts, with nothing to say whether that was "loading" or
+  // "broken". Tracked explicitly so the skeleton can say which.
+  const [scenariosLoading, setScenariosLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Audit P1: these two failures used to be swallowed. A risk tool that
+  // renders a dash where a number belongs, with no indication that a request
+  // failed, is worse than one that errors — the reader cannot tell "we
+  // simulated this and it is unavailable" from "we never asked".
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  // G4: who is signed in, so the governance card can offer (or withhold)
+  // sign-off. This only decides what to render — the server re-checks.
+  const [viewer, setViewer] = useState<Viewer | null>(null);
+  const [whatIfError, setWhatIfError] = useState<string | null>(null);
   const [histogramDetail, setHistogramDetail] = useState<string | null>(null);
   const [lecDetail, setLecDetail] = useState<string | null>(null);
 
@@ -171,6 +237,8 @@ export function Dashboard() {
       }
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Failed to load dashboard data");
+    } finally {
+      setScenariosLoading(false);
     }
   }
 
@@ -178,15 +246,24 @@ export function Dashboard() {
     try {
       const res = await fetch("/api/risk", { cache: "no-store" });
       const data = await res.json();
-      if (res.ok) setHistory(data.history);
-    } catch {
-      // history is a nice-to-have trend chart — a failed load shouldn't block the rest of the dashboard
+      if (!res.ok) throw new Error(data?.error ?? `Request failed (${res.status})`);
+      setHistory(data.history);
+      setHistoryError(null);
+    } catch (err) {
+      // A failed load still must not block the rest of the dashboard, but it
+      // does have to be visible: the trend chart simply vanishing reads as
+      // "no history yet", which is a different and wrong claim.
+      setHistoryError(err instanceof Error ? err.message : "Could not load assessment history");
     }
   }
 
   useEffect(() => {
     loadScenarios();
     loadHistory();
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setViewer(d?.user ?? null))
+      .catch(() => setViewer(null));
   }, []);
 
   async function runSimulation() {
@@ -244,22 +321,40 @@ export function Dashboard() {
 
   const selectedScenario = scenarios.find((s) => s.id === scenarioId);
   const toleranceValue = riskTolerance ? Number(riskTolerance) : null;
-  const toleranceBand = bandForTolerance(toleranceValue);
   const latestRun = runs[0] ?? null;
+  // M9: the band is relative to the modelled mean ALE, so it has to be
+  // derived AFTER latestRun exists.
+  const toleranceBand = bandForTolerance(toleranceValue, latestRun?.result.meanAle ?? null);
 
-  const toleranceSliderMax = latestRun
-    ? latestRun.result.histogram[latestRun.result.histogram.length - 1].rangeEnd
-    : DEFAULT_TOLERANCE_MAX;
+  // P3: the domain used to be the last run's largest simulated loss — the
+  // noisiest statistic available — so ceiling and step moved after every run
+  // and a tolerance set by dragging could land elsewhere next time. Now
+  // quantised off P90, it moves only when the scenario genuinely does.
+  const { max: toleranceSliderMax, step: toleranceSliderStep } = toleranceSliderDomain(
+    latestRun?.result.p90Ale ?? null,
+    DEFAULT_TOLERANCE_MAX
+  );
 
+  // M1: this used to interpolate the 41-point curve client-side, producing a
+  // THIRD estimate that disagreed with the server's (and with the value
+  // persisted to the database) by about a percentage point — at a 10% decision
+  // boundary. It now re-scores the server's own sample with the server's own
+  // function, so dragging the tolerance stays instant AND exact.
   const liveExceedProbability = useMemo(() => {
     if (!latestRun || toleranceValue === null) return null;
-    return interpolateLec(latestRun.result.lec, toleranceValue);
+    const sample = latestRun.result.sortedLosses;
+    if (!sample) return latestRun.result.pExceedTolerance;
+    return exceedanceProbability(sample, toleranceValue);
   }, [latestRun, toleranceValue]);
 
-  const requiredToleranceForGreen = useMemo(() => {
-    if (!latestRun) return null;
-    return toleranceForTargetProbability(latestRun.result.lec, TARGET_EXCEED_PROBABILITY);
-  }, [latestRun]);
+  const liveExceedError = useMemo(() => {
+    if (!latestRun || liveExceedProbability === null) return null;
+    return standardErrorOfProportion(liveExceedProbability, latestRun.result.trials);
+  }, [latestRun, liveExceedProbability]);
+
+  // M4: no longer inverted from a grid — the engine returns the quantile that
+  // IS the P90, so the recommendation and the tile cannot disagree.
+  const requiredToleranceForGreen = latestRun?.result.toleranceForGreen ?? null;
 
   // Seed the what-if panel from the real latest run whenever it changes, but
   // nudged +10 points above today's actual coverage (not equal to it): if the
@@ -276,49 +371,56 @@ export function Dashboard() {
   // Debounced live re-simulation as the user drags the coverage slider or
   // toggles threats — a real 4,000-trial run per change, so it waits for a
   // pause rather than firing on every pixel of drag.
+  //
+  // S7: this used to fire 1 + N requests per tick — one for the current set,
+  // one per threat for the "without it" weights. With five threats that was
+  // six authenticated Monte Carlo invocations per 400ms of dragging. The
+  // server now computes the leave-one-out variants in the same call, off the
+  // same seeded sample, so it is one request and the marginal weights are
+  // common-random-numbers comparable with the headline instead of being
+  // independent draws.
   useEffect(() => {
     if (!whatIfOpen || !scenarioId || toleranceValue === null) return;
     setWhatIfLoading(true);
     const handle = setTimeout(async () => {
       const requestId = ++whatIfRequestId.current;
-      const runWhatIf = async (ids: string[]) => {
-        try {
-          const res = await fetch("/api/risk/whatif", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              scenarioId,
-              threatIds: ids,
-              riskTolerance: toleranceValue,
-              coveragePct: whatIfCoverage,
-            }),
-          });
-          const data = await res.json();
-          return res.ok ? (data.result as FairResult) : null;
-        } catch {
-          return null;
+      setWhatIfError(null);
+      try {
+        const res = await fetch("/api/risk/whatif", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scenarioId,
+            threatIds: whatIfThreatIds,
+            riskTolerance: toleranceValue,
+            coveragePct: whatIfCoverage,
+            // Common random numbers: evaluate the hypothetical on the SAME
+            // sampled years as the baseline it will be differenced against
+            // (audit M7), at the same trial count.
+            seed: latestRun?.result.seed,
+            trials: latestRun?.result.trials,
+            leaveOneOut: true,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error ?? `Simulation failed (${res.status})`);
+        if (requestId !== whatIfRequestId.current) return; // a newer drag superseded this one
+        setWhatIfResult(data.result as FairResult);
+        setPerThreatWithoutResult((data.without ?? {}) as Record<string, number | null>);
+      } catch (err) {
+        // Only the live request gets to report — a superseded drag failing
+        // must not paint an error over a newer, successful run.
+        if (requestId === whatIfRequestId.current) {
+          setWhatIfError(err instanceof Error ? err.message : "Simulation failed");
+          setWhatIfResult(null);
+          setPerThreatWithoutResult({});
         }
-      };
-
-      const main = await runWhatIf(whatIfThreatIds);
-      if (requestId !== whatIfRequestId.current) return; // a newer drag superseded this one
-      setWhatIfResult(main);
-
-      // One extra simulation per currently-included threat, run in parallel,
-      // each with that single threat dropped and everything else held fixed.
-      const perThreat = await Promise.all(
-        whatIfThreatIds.map(async (id) => {
-          const without = await runWhatIf(whatIfThreatIds.filter((t) => t !== id));
-          return [id, without?.pExceedTolerance ?? null] as const;
-        })
-      );
-      if (requestId === whatIfRequestId.current) {
-        setPerThreatWithoutResult(Object.fromEntries(perThreat));
-        setWhatIfLoading(false);
+      } finally {
+        if (requestId === whatIfRequestId.current) setWhatIfLoading(false);
       }
     }, 400);
     return () => clearTimeout(handle);
-  }, [whatIfOpen, scenarioId, whatIfThreatIds, whatIfCoverage, toleranceValue]);
+  }, [whatIfOpen, scenarioId, whatIfThreatIds, whatIfCoverage, toleranceValue, latestRun]);
 
   // Computed once per scenario/tolerance (not on every drag) — the best case
   // actually achievable through controls: 100% coverage, holding TODAY'S
@@ -344,12 +446,21 @@ export function Dashboard() {
             threatIds: latestRun.threatIds,
             riskTolerance: toleranceValue,
             coveragePct: 100,
+            seed: latestRun.result.seed,
+            trials: latestRun.result.trials,
           }),
         });
         const data = await res.json();
-        if (!cancelled && res.ok) setBestCaseFloor(data.result.pExceedTolerance);
-      } catch {
-        // ceiling check is a nice-to-have hint, not load-bearing
+        if (cancelled) return;
+        if (!res.ok) throw new Error(data?.error ?? `Simulation failed (${res.status})`);
+        setBestCaseFloor(data.result.pExceedTolerance);
+      } catch (err) {
+        // The ceiling check is a hint rather than a headline, so it degrades
+        // to absent instead of blanking the panel — but it says that it did.
+        if (!cancelled) {
+          setBestCaseFloor(null);
+          setWhatIfError((prev) => prev ?? (err instanceof Error ? err.message : "Simulation failed"));
+        }
       }
     })();
     return () => {
@@ -365,17 +476,47 @@ export function Dashboard() {
   const riskReductionValue =
     latestRun && whatIfResult ? latestRun.result.meanAle - whatIfResult.meanAle : null;
   const annualControlCostValue = annualControlCost ? Number(annualControlCost) : null;
+
+  // M7: the two sides of this subtraction are independent samples, so their
+  // difference carries the noise of both. When the difference sits inside that
+  // noise, its SIGN can flip between runs — and the panel was asserting "the
+  // investment more than pays for itself" on exactly that. Below the
+  // separation threshold we say so instead of stating a verdict.
+  const riskReductionIsReal =
+    latestRun !== null &&
+    whatIfResult !== null &&
+    separated(latestRun.result.meanAle, latestRun.result.seMeanAle, whatIfResult.meanAle, whatIfResult.seMeanAle);
+
   const rosiPct =
-    riskReductionValue !== null && annualControlCostValue && annualControlCostValue > 0
+    riskReductionValue !== null && riskReductionIsReal && annualControlCostValue && annualControlCostValue > 0
       ? ((riskReductionValue - annualControlCostValue) / annualControlCostValue) * 100
       : null;
 
-  const histogramConfig = useMemo<ChartConfiguration<any> | null>(() => {
+  // Audit A1: each chart memo returns its text alternative alongside its
+  // configuration, so the two are derived from one set of numbers and cannot
+  // drift. Every summary states the headline VALUES, not just the chart type.
+  const histogramChart = useMemo<ChartSpec | null>(() => {
     if (!latestRun) return null;
     const { histogram } = latestRun.result;
-    const toleranceIdx =
-      toleranceValue !== null ? histogram.findIndex((b) => toleranceValue < b.rangeEnd) : -1;
-    return {
+    // M11: the bucket CONTAINING the tolerance was painted fully red, though
+    // only the portion above the line breaches. With 24 buckets over ~$41M
+    // that is up to ~$1.7M of loss shown as a breach that is not one, in the
+    // most-glanced-at chart in the product. A bucket is now red only when it
+    // lies entirely above the tolerance; the straddling one is amber.
+    const straddlingIdx =
+      toleranceValue !== null
+        ? histogram.findIndex((b) => toleranceValue >= b.rangeStart && toleranceValue < b.rangeEnd)
+        : -1;
+    const isBreachBucket = (b: HistogramBucket) => toleranceValue !== null && b.rangeStart >= toleranceValue;
+    const { trials, meanAle, p50Ale, p90Ale, sortedLosses } = latestRun.result;
+    // M1/M11: the count of breaching YEARS comes from the sample via the one
+    // estimator, not by summing whole buckets — buckets are a drawing grid and
+    // summing them double-counts the straddling one.
+    const overTolerance =
+      toleranceValue !== null && sortedLosses
+        ? Math.round(exceedanceProbability(sortedLosses, toleranceValue) * trials)
+        : null;
+    const config: ChartConfiguration<any> = {
       type: "bar",
       data: {
         labels: histogram.map((b) => currency(b.rangeStart)),
@@ -383,7 +524,9 @@ export function Dashboard() {
           {
             label: "Simulated years",
             data: histogram.map((b) => b.count),
-            backgroundColor: histogram.map((_, i) => (toleranceIdx >= 0 && i >= toleranceIdx ? "#ff453a" : "#0a84ff")),
+            backgroundColor: histogram.map((b, i) =>
+              isBreachBucket(b) ? "#ff453a" : i === straddlingIdx ? "#ff9f0a" : "#0a84ff"
+            ),
             borderRadius: 3,
             barPercentage: 1,
             categoryPercentage: 0.95,
@@ -397,8 +540,12 @@ export function Dashboard() {
           if (elements.length === 0) return;
           const b = histogram[elements[0].index];
           const pct = ((b.count / latestRun.result.trials) * 100).toFixed(1);
+          // P6/M12: this used compact notation ("$16.9M–$18.1M") for what
+          // reads as an exact range. Those were Intl compact-rounded values,
+          // not the bucket's real edges. Compact belongs on axes, where space
+          // is the constraint; a detail readout shows the actual numbers.
           setHistogramDetail(
-            `${currency(b.rangeStart)}–${currency(b.rangeEnd)}: ${b.count} of ${latestRun.result.trials} simulated years (${pct}%)`
+            `${currencyFull(b.rangeStart)}–${currencyFull(b.rangeEnd)}: ${b.count} of ${latestRun.result.trials} simulated years (${pct}%)`
           );
         },
         interaction: { mode: "nearest", intersect: false, axis: "x" },
@@ -409,11 +556,36 @@ export function Dashboard() {
         },
       },
     };
+    return {
+      config,
+      summary:
+        `Histogram of annual loss across ${trials.toLocaleString()} simulated years. ` +
+        `Mean ${currencyFull(meanAle)}, median ${currencyFull(p50Ale)}, ` +
+        `90th percentile ${currencyFull(p90Ale)}.` +
+        // findIndex also returns -1 when the tolerance sits ABOVE the whole
+        // sample, which is a real and different answer — "no year breached it"
+        // is not the same statement as "no tolerance was set".
+        (toleranceValue === null
+          ? " No risk tolerance is set, so no band is marked as a breach."
+          : overTolerance === null
+          ? ` No simulated year reached the ${currencyFull(toleranceValue)} tolerance.`
+          : ` ${overTolerance.toLocaleString()} of those years (${((overTolerance / trials) * 100).toFixed(1)}%) land above the ${currencyFull(toleranceValue)} tolerance.`),
+      table: {
+        caption: `Simulated annual loss by band, ${trials.toLocaleString()} trials`,
+        head: ["Loss band", "Simulated years", "Share of years", "Above tolerance"],
+        rows: histogram.map((b, i) => [
+          `${currency(b.rangeStart)}–${currency(b.rangeEnd)}`,
+          b.count,
+          `${((b.count / trials) * 100).toFixed(1)}%`,
+          isBreachBucket(b) ? "yes" : i === straddlingIdx ? "partly — the tolerance falls inside this band" : "no",
+        ]),
+      },
+    };
   }, [latestRun, toleranceValue]);
 
-  const lecConfig = useMemo<ChartConfiguration<any> | null>(() => {
+  const lecChart = useMemo<ChartSpec | null>(() => {
     if (runs.length === 0) return null;
-    return {
+    const config: ChartConfiguration<any> = {
       type: "line",
       data: {
         datasets: runs.map((run) => ({
@@ -435,7 +607,7 @@ export function Dashboard() {
           const run = runs[el.datasetIndex];
           const point = run.result.lec[el.index];
           setLecDetail(
-            `${run.label} — at ${currency(point.loss)}: ${(point.probability * 100).toFixed(1)}% probability of exceeding`
+            `${run.label} — at ${currencyFull(point.loss)}: ${formatPercent(point.probability)} probability of exceeding`
           );
         },
         interaction: { mode: "nearest", intersect: false, axis: "x" },
@@ -460,12 +632,38 @@ export function Dashboard() {
         },
       },
     };
+    // The curve is 240 points per run — useless read aloud. The percentiles
+    // are what anyone actually takes off it, and they come from the same
+    // single estimator the curve does (audit M1), so the table is the chart.
+    return {
+      config,
+      summary:
+        `Loss exceedance curve${runs.length > 1 ? ` comparing ${runs.length} runs` : ""}. ` +
+        runs
+          .map(
+            (run) =>
+              `${run.label}: half of simulated years exceed ${currencyFull(run.result.p50Ale)}, ` +
+              `one year in ten exceeds ${currencyFull(run.result.p90Ale)}.`
+          )
+          .join(" "),
+      table: {
+        caption: "Annual loss at each exceedance probability, by run",
+        head: ["Run", "Exceeded in 90% of years (P10)", "Exceeded in 50% of years (P50)", "Exceeded in 10% of years (P90)", "Mean"],
+        rows: runs.map((run) => [
+          run.label,
+          currencyFull(run.result.p10Ale),
+          currencyFull(run.result.p50Ale),
+          currencyFull(run.result.p90Ale),
+          currencyFull(run.result.meanAle),
+        ]),
+      },
+    };
   }, [runs]);
 
-  const trendConfig = useMemo<ChartConfiguration<any> | null>(() => {
+  const trendChart = useMemo<ChartSpec | null>(() => {
     if (history.length === 0) return null;
     const ordered = [...history].reverse();
-    return {
+    const config: ChartConfiguration<any> = {
       type: "line",
       data: {
         labels: ordered.map((h) =>
@@ -496,6 +694,30 @@ export function Dashboard() {
         },
       },
     };
+    const first = ordered[0];
+    const last = ordered[ordered.length - 1];
+    const direction =
+      ordered.length < 2
+        ? "a single assessment, so there is no trend yet"
+        : last.meanAle > first.meanAle
+        ? `rising from ${currencyFull(first.meanAle)} to ${currencyFull(last.meanAle)}`
+        : last.meanAle < first.meanAle
+        ? `falling from ${currencyFull(first.meanAle)} to ${currencyFull(last.meanAle)}`
+        : `flat at ${currencyFull(last.meanAle)}`;
+    return {
+      config,
+      summary: `Mean annual loss expectancy across ${ordered.length} saved assessment${
+        ordered.length === 1 ? "" : "s"
+      }, ${direction}.`,
+      table: {
+        caption: "Mean annual loss expectancy by assessment date",
+        head: ["Assessment date (UTC)", "Mean ALE"],
+        rows: ordered.map((h) => [
+          new Date(h.createdAt).toISOString().replace("T", " ").slice(0, 16) + " UTC",
+          currencyFull(h.meanAle),
+        ]),
+      },
+    };
   }, [history]);
 
   return (
@@ -511,6 +733,9 @@ export function Dashboard() {
         <div className="mb-6 rounded-lg border border-risk/30 bg-risk/10 text-risk px-4 py-3 text-sm">{loadError}</div>
       )}
 
+      {scenariosLoading && !loadError ? (
+        <ControlPanelSkeleton />
+      ) : (
       <div className="rounded-xl border border-border bg-surface p-5 mb-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
           <SelectDropdown
@@ -538,6 +763,12 @@ export function Dashboard() {
                 className={`text-[11px] font-medium whitespace-nowrap shrink-0 ${TOLERANCE_BAND_TEXT[toleranceBand]}`}
               >
                 {TOLERANCE_BAND_LABEL[toleranceBand]}
+                {toleranceBand !== "none" && latestRun && toleranceValue !== null && (
+                  <span className="text-slate-500">
+                    {" "}
+                    ({(toleranceValue / latestRun.result.meanAle).toFixed(2)}x modelled mean ALE)
+                  </span>
+                )}
               </span>
             </div>
             <input
@@ -545,7 +776,7 @@ export function Dashboard() {
               aria-labelledby="risk-tolerance-label"
               min={0}
               max={toleranceSliderMax}
-              step={Math.max(1, Math.round(toleranceSliderMax / 500))}
+              step={toleranceSliderStep}
               value={toleranceValue ?? 0}
               onChange={(e) => handleToleranceChange(e.target.value)}
               className="w-full accent-accent"
@@ -569,7 +800,7 @@ export function Dashboard() {
             disabled={running || !scenarioId}
             className="btn-primary"
           >
-            {running ? "Running 8,000 trials…" : "Run Simulation"}
+            {running ? `Running ${DEFAULT_TRIALS.toLocaleString()} trials…` : "Run Simulation"}
           </button>
           {runs.length > 0 && (
             <button
@@ -585,6 +816,7 @@ export function Dashboard() {
           )}
         </div>
       </div>
+      )}
 
       {latestRun && (
         <>
@@ -594,7 +826,11 @@ export function Dashboard() {
             <StatCard label="P90 ALE" value={currencyFull(latestRun.result.p90Ale)} />
             <StatCard
               label="P(loss > tolerance)"
-              value={liveExceedProbability !== null ? `${(liveExceedProbability * 100).toFixed(2)}%` : "—"}
+              value={
+                liveExceedProbability !== null
+                  ? formatPercentWithError(liveExceedProbability, liveExceedError ?? 0)
+                  : "—"
+              }
               accent={
                 liveExceedProbability === null
                   ? undefined
@@ -725,15 +961,34 @@ export function Dashboard() {
                   <div className="text-xs text-slate-400 mb-1">
                     P(loss &gt; tolerance) at these settings{whatIfLoading ? " (recalculating…)" : ""}
                   </div>
-                  <div className={`text-2xl font-semibold tabular-nums ${whatIfIsGreen ? "text-emerald-400" : "text-risk"}`}>
-                    {whatIfExceedProbability !== null ? `${(whatIfExceedProbability * 100).toFixed(2)}%` : "—"}
+                  {whatIfError && (
+                    <p role="status" className="text-xs text-amber-300 mb-2">
+                      Could not re-simulate: {whatIfError}. Whatever is shown below is stale or unavailable — treat it
+                      as absent, not as a result.
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-2xl font-semibold tabular-nums ${whatIfIsGreen ? "text-emerald-400" : "text-risk"}`}>
+                      {whatIfExceedProbability !== null
+                        ? formatPercentWithError(whatIfExceedProbability, whatIfResult?.sePExceedTolerance ?? 0)
+                        : "—"}
+                    </span>
+                    {whatIfExceedProbability !== null && (
+                      <StatusBadge status={whatIfIsGreen ? "pass" : "fail"}>
+                        {whatIfIsGreen ? "Within appetite" : "Above appetite"}
+                      </StatusBadge>
+                    )}
                   </div>
                   <p className="text-xs text-slate-400 mt-2">
                     {whatIfIsGreen
                       ? `At ${whatIfCoverage}% control coverage with ${whatIfThreatIds.length} threat${
                           whatIfThreatIds.length === 1 ? "" : "s"
                         } still in scope, this drops under the ${(TARGET_EXCEED_PROBABILITY * 100).toFixed(0)}% bar — that's the combination to take to the board as the mitigation plan.`
-                      : `vs. ${liveExceedProbability !== null ? `${(liveExceedProbability * 100).toFixed(2)}%` : "—"} today. Drag coverage up to see what it takes to go green — dropping a threat only tells you its weight, it isn't a real mitigation.`}
+                      : `vs. ${
+                          liveExceedProbability !== null
+                            ? formatPercentWithError(liveExceedProbability, liveExceedError ?? 0)
+                            : "—"
+                        } today. Drag coverage up to see what it takes to go green — dropping a threat only tells you its weight, it isn't a real mitigation.`}
                   </p>
                 </div>
               </div>
@@ -760,7 +1015,11 @@ export function Dashboard() {
                   <div>
                     <div className="text-xs text-slate-500 mb-1">Expected annual loss avoided</div>
                     <div className="text-lg font-semibold tabular-nums text-slate-100">
-                      {riskReductionValue !== null ? currencyFull(Math.max(riskReductionValue, 0)) : "—"}
+                      {riskReductionValue === null
+                        ? "—"
+                        : riskReductionIsReal
+                        ? currencyFull(Math.max(riskReductionValue, 0))
+                        : "Not measurable"}
                     </div>
                   </div>
                   <div>
@@ -770,7 +1029,11 @@ export function Dashboard() {
                         rosiPct === null ? "text-slate-100" : rosiPct >= 0 ? "text-emerald-400" : "text-risk"
                       }`}
                     >
-                      {rosiPct !== null ? `${rosiPct >= 0 ? "+" : ""}${rosiPct.toFixed(0)}%` : "Enter a cost"}
+                      {rosiPct !== null
+                        ? `${rosiPct >= 0 ? "+" : ""}${rosiPct.toFixed(0)}% ${rosiPct >= 0 ? "(pays for itself)" : "(costs more than it avoids)"}`
+                        : annualControlCostValue && !riskReductionIsReal
+                        ? "Inside the noise"
+                        : "Enter a cost"}
                     </div>
                   </div>
                 </div>
@@ -790,25 +1053,64 @@ export function Dashboard() {
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             <ChartCard title="Simulated Annual Loss Distribution" detail={histogramDetail} hint="Click a bar for detail">
-              {histogramConfig && <ChartCanvas config={histogramConfig} />}
+              {histogramChart && <ChartCanvas {...histogramChart} />}
             </ChartCard>
             <ChartCard
               title={runs.length > 1 ? "Loss Exceedance Curve — comparing runs" : "Loss Exceedance Curve"}
               detail={lecDetail}
               hint="Click the curve for detail · run again to compare"
             >
-              {lecConfig && <ChartCanvas config={lecConfig} />}
+              {lecChart && <ChartCanvas {...lecChart} />}
             </ChartCard>
           </div>
         </>
       )}
 
-      {trendConfig && (
+      {history[0] && (
+        <AssessmentGovernance assessment={history[0]} viewer={viewer} onApproved={loadHistory} />
+      )}
+
+      {historyError ? (
         <ChartCard title="Mean ALE Over Time (Audit Trail)">
-          <ChartCanvas config={trendConfig} />
+          <p role="status" className="text-sm text-amber-300">
+            Could not load assessment history: {historyError}. This is a load failure, not an empty trend — past
+            assessments may well exist.
+          </p>
         </ChartCard>
+      ) : (
+        trendChart && (
+          <ChartCard title="Mean ALE Over Time (Audit Trail)">
+            <ChartCanvas {...trendChart} />
+          </ChartCard>
+        )
       )}
     </>
+  );
+}
+
+// P2: a skeleton that says it is loading rather than an empty form that looks
+// broken. aria-busy + a live region mean a screen reader is told the same
+// thing the animation tells a sighted user, instead of being read an empty
+// panel and then silently re-read a populated one.
+function ControlPanelSkeleton() {
+  return (
+    <div
+      className="rounded-xl border border-border bg-surface p-5 mb-6"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <p className="sr-only">Loading scenarios and threat catalogue.</p>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+        {["Industry Scenario", "Threat Types", "Risk Tolerance"].map((label) => (
+          <div key={label} className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-slate-500">{label}</span>
+            <div className="h-9 rounded-lg bg-white/5 animate-pulse" />
+          </div>
+        ))}
+      </div>
+      <div className="h-3 w-2/3 rounded bg-white/5 animate-pulse mb-4" />
+      <div className="h-9 w-40 rounded-lg bg-white/5 animate-pulse" />
+    </div>
   );
 }
 

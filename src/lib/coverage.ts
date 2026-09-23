@@ -1,17 +1,40 @@
-// Per-framework coverage roll-up.
+// Per-framework coverage roll-up (audit G2, G3).
 //
-// A control counts toward a framework only if it actually maps to it (its
-// mapping cell isn't "N/A") — otherwise EU AI Act would be dragged down by
-// the seven controls that have nothing to do with it.
+// Two dimensions, never collapsed into one number:
+//
+//   SCOPE          how much of the framework this catalogue addresses at all
+//                  — distinct requirement references mapped / the framework's
+//                  published requirement population.
+//   IMPLEMENTATION how well the controls we DO map are actually run — the mean
+//                  coverage across them. This is the number the sliders edit.
+//   ASSESSED       scope x implementation. The only one of the three that can
+//                  honestly sit next to a framework's name as "our coverage".
+//
+// The old single percentage was implementation presented as if it were
+// assessed coverage, which overstated posture by more than an order of
+// magnitude for every framework in the catalogue.
 import type { ControlRow, FrameworkColumn } from "@/components/ControlTable";
+import { frameworkMeta } from "./frameworks";
 
 export interface FrameworkCoverage {
   id: string;
   label: string;
   field: FrameworkColumn["field"];
+  /** Controls in this catalogue that map to the framework at all. */
   mappedCount: number;
   controlIds: string[];
-  coveragePct: number | null; // null when no control maps to this framework
+  /** Distinct requirement references touched — two controls can cite one requirement. */
+  distinctReferences: number;
+  /** The framework's own requirement count, or null where it has no single denominator. */
+  population: number | null;
+  unit: string;
+  approximate: boolean;
+  scopePct: number | null;
+  /** Mean coverage across the mapped controls. Null when nothing maps. */
+  implementationPct: number | null;
+  assessedPct: number | null;
+  /** Alias for implementationPct — what the per-framework slider edits. */
+  coveragePct: number | null;
 }
 
 // One definition of "this control maps to this framework", used by both the
@@ -28,35 +51,61 @@ export function coverageByFramework(
 ): FrameworkCoverage[] {
   return frameworks.map((f) => {
     const mapped = controls.filter((c) => mapsToFramework(c, f.field));
+    const references = new Set(mapped.map((c) => String(c[f.field]).trim()));
+    const meta = frameworkMeta(f.id);
+    const population = meta?.population ?? null;
+
+    const implementationPct =
+      mapped.length > 0 ? mapped.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / mapped.length : null;
+    const scopePct = population && population > 0 ? (references.size / population) * 100 : null;
+    const assessedPct =
+      scopePct !== null && implementationPct !== null ? (scopePct * implementationPct) / 100 : null;
+
     return {
       id: f.id,
       label: f.label,
       field: f.field,
       mappedCount: mapped.length,
       controlIds: mapped.map((c) => c.id).sort(),
-      coveragePct:
-        mapped.length > 0 ? mapped.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / mapped.length : null,
+      distinctReferences: references.size,
+      population,
+      unit: meta?.unit ?? "requirements",
+      approximate: meta?.approximate ?? false,
+      scopePct,
+      implementationPct,
+      assessedPct,
+      coveragePct: implementationPct,
     };
   });
 }
 
-// Headline number = mean of the per-framework percentages, so every framework
-// carries equal weight regardless of how many controls happen to map to it.
-// (Averaging raw controls instead would let whichever framework has the most
-// mappings quietly dominate the figure.)
+/**
+ * Mean IMPLEMENTATION across frameworks — how well the mapped controls are run.
+ *
+ * Equal weight per framework, so whichever framework happens to have the most
+ * mappings cannot quietly dominate. This is NOT a statement of compliance
+ * coverage; see averageAssessed below, and never present this one beside a
+ * framework's name on its own.
+ */
 export function averageOfFrameworks(rows: FrameworkCoverage[]): number {
-  const scored = rows.filter((r) => r.coveragePct !== null);
+  const scored = rows.filter((r) => r.implementationPct !== null);
   if (scored.length === 0) return 0;
-  return scored.reduce((sum, r) => sum + (r.coveragePct ?? 0), 0) / scored.length;
+  return scored.reduce((sum, r) => sum + (r.implementationPct ?? 0), 0) / scored.length;
 }
 
+/** Mean ASSESSED coverage — scope x implementation, across frameworks that have a denominator. */
+export function averageAssessed(rows: FrameworkCoverage[]): number | null {
+  const scored = rows.filter((r) => r.assessedPct !== null);
+  if (scored.length === 0) return null;
+  return scored.reduce((sum, r) => sum + (r.assessedPct ?? 0), 0) / scored.length;
+}
 
-// Frameworks whose mapped control set is IDENTICAL to this one's. Coverage is
-// stored per control, not per control-per-framework, so two frameworks that
-// map the same controls are the same average by definition — their sliders
-// can never disagree, no matter how the write is done. That is a property of
-// the data model, not a bug, and the UI should say so rather than pretend the
-// sliders are independent.
+// Frameworks whose mapped control set is IDENTICAL to this one's (audit G3).
+// Coverage is stored per control, not per control-per-framework, so two
+// frameworks mapping the same controls share one IMPLEMENTATION figure by
+// definition. Their SCOPE still differs, because their requirement
+// populations differ — which is why splitting the two dimensions also fixes
+// the "four frameworks can never disagree" complaint.
 export function identicalSetPeers(row: FrameworkCoverage, all: FrameworkCoverage[]): string[] {
   if (row.controlIds.length === 0) return [];
   const key = row.controlIds.join("|");

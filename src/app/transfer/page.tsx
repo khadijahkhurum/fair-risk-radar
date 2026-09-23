@@ -11,11 +11,22 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ChartConfiguration } from "chart.js";
 import { AppShell } from "@/components/AppShell";
-import { ChartCanvas } from "@/components/ChartCanvas";
+import { ChartCanvas, type ChartSpec } from "@/components/ChartCanvas";
+import { formatPercent, GREEN_THRESHOLD as TARGET_EXCEED_PROBABILITY } from "@/lib/stats";
+// E3: the green threshold lives in src/lib/stats.ts, where the engine reads it
+// too — aliased rather than redeclared, so the page and the simulation cannot
+// drift apart about what "within appetite" means.
+import { StatusBadge } from "@/components/StatusBadge";
 import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { SelectDropdown } from "@/components/SelectDropdown";
 import { interpolateLec, type LecPoint } from "@/lib/lec";
-import { expectedRecovery, retainedExceedProbability, indicativePremium, totalCostOfRisk } from "@/lib/insurance";
+import {
+  expectedRecoveryFromSample,
+  retainedExceedProbabilityFromSample,
+  tailReliability,
+  indicativePremium,
+  totalCostOfRisk,
+} from "@/lib/insurance";
 
 interface Scenario { id: string; name: string }
 interface Threat { id: string; name: string }
@@ -24,15 +35,18 @@ interface SimResult {
   meanAle: number;
   lec: LecPoint[];
   pExceedTolerance: number | null;
+  /** Requested via includeSample — the layer is priced from this, not the curve (M8). */
+  sortedLosses?: number[];
 }
 
-const TARGET_EXCEED_PROBABILITY = 0.1;
+
 
 const currency = (v: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 }).format(v);
 const currencyFull = (v: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
-const pct = (p: number | null) => (p === null ? "—" : `${(p * 100).toFixed(2)}%`);
+// M12: one precision policy, in stats.ts, for every surface.
+const pct = (p: number | null) => formatPercent(p);
 
 export default function TransferPage() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
@@ -94,7 +108,14 @@ export default function TransferPage() {
         const res = await fetch("/api/risk/whatif", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scenarioId, threatIds, riskTolerance: toleranceValue, coveragePct }),
+          body: JSON.stringify({
+            scenarioId,
+            threatIds,
+            riskTolerance: toleranceValue,
+            coveragePct,
+            // M8: price the layer from the sample, not by integrating the curve.
+            includeSample: true,
+          }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "Simulation failed");
@@ -114,15 +135,33 @@ export default function TransferPage() {
   );
   const layerSet = layer.limit > 0;
 
+  // M8: exact for the sample — one pass of E[min(max(L-A,0), Limit)] — rather
+  // than trapezoids over an interpolated curve truncated at the worst
+  // simulated year.
   const recovery = useMemo(
-    () => (result && layerSet ? expectedRecovery(result.lec, layer) : 0),
+    () => (result?.sortedLosses && layerSet ? expectedRecoveryFromSample(result.sortedLosses, layer) : 0),
+    [result, layer, layerSet]
+  );
+
+  // M8: a finite sample cannot see past its own maximum, so a high attachment
+  // is priced on years the simulation never produced. Say so rather than
+  // returning a confident near-zero.
+  const tail = useMemo(
+    () => (result?.sortedLosses && layerSet ? tailReliability(result.sortedLosses, layer) : null),
     [result, layer, layerSet]
   );
   const premium = premiumInput ? Number(premiumInput) : indicativePremium(recovery);
   const retainedLoss = result ? Math.max(result.meanAle - recovery, 0) : 0;
   const grossExceed = result?.pExceedTolerance ?? null;
+  // M8/M1: this used to read the "after" figure off the interpolated curve
+  // while the "before" came from the raw sample, so roughly a percentage point
+  // of the reported benefit of insurance was an estimator artefact. Both sides
+  // now come from the same sorted sample.
   const netExceed = useMemo(
-    () => (result && toleranceValue !== null && layerSet ? retainedExceedProbability(result.lec, toleranceValue, layer) : grossExceed),
+    () =>
+      result?.sortedLosses && toleranceValue !== null && layerSet
+        ? retainedExceedProbabilityFromSample(result.sortedLosses, toleranceValue, layer)
+        : grossExceed,
     [result, toleranceValue, layer, layerSet, grossExceed]
   );
   const grossGreen = grossExceed !== null && grossExceed <= TARGET_EXCEED_PROBABILITY;
@@ -133,10 +172,12 @@ export default function TransferPage() {
   // so the curve is unchanged; above it the layer pins your loss at the
   // attachment until the policy is exhausted, so the curve jumps to where the
   // gross curve sits a full limit further out.
-  const chartConfig: ChartConfiguration<"line"> | null = useMemo(() => {
+  const chart = useMemo<ChartSpec | null>(() => {
     if (!result || result.lec.length === 0) return null;
     const xs = result.lec.map((p) => p.loss);
-    return {
+    const retainedAt = (x: number) =>
+      x < layer.attachment ? interpolateLec(result.lec, x) : interpolateLec(result.lec, x + layer.limit);
+    const config: ChartConfiguration<"line"> = {
       type: "line",
       data: {
         labels: xs.map((x) => currency(x)),
@@ -155,7 +196,7 @@ export default function TransferPage() {
                 {
                   label: "Retained loss (after transfer)",
                   data: xs.map((x) => {
-                    const p = x < layer.attachment ? interpolateLec(result.lec, x) : interpolateLec(result.lec, x + layer.limit);
+                    const p = retainedAt(x);
                     return p === null ? null : p * 100;
                   }),
                   borderColor: "#64d2ff",
@@ -192,7 +233,40 @@ export default function TransferPage() {
         plugins: { legend: { labels: { color: "#d1d1d6" } } },
       },
     };
-  }, [result, layer, layerSet]);
+    // Audit A1. The curve is LEC_POINTS wide — reading 240 rows aloud is not
+    // an alternative to anything, so the table samples ~12 evenly spaced
+    // losses. The summary carries what the chart is actually there to show:
+    // where the layer starts biting and by how much.
+    const stride = Math.max(1, Math.ceil(result.lec.length / 12));
+    const sampled = result.lec.filter((_, i) => i % stride === 0);
+    const bar = (TARGET_EXCEED_PROBABILITY * 100).toFixed(0);
+    return {
+      config,
+      summary: layerSet
+        ? `Probability of exceeding each annual loss level, uninsured versus after transfer, against a ${bar}% risk-appetite bar. ` +
+          `Below the ${currencyFull(layer.attachment)} retention the two curves are identical — that loss is carried either way. ` +
+          `Above it the ${currencyFull(layer.limit)} layer absorbs the tail` +
+          (grossExceed !== null && netExceed !== null
+            ? `, taking the chance of breaching the tolerance from ${pct(grossExceed)} to ${pct(netExceed)}.`
+            : ".")
+        : `Probability of exceeding each annual loss level, uninsured, against a ${bar}% risk-appetite bar. ` +
+          `Enter a retention and a limit to see the retained-loss curve alongside it.`,
+      table: {
+        caption: layerSet
+          ? "Probability of exceeding each annual loss level, uninsured and after transfer"
+          : "Probability of exceeding each annual loss level, uninsured",
+        head: layerSet
+          ? ["Annual loss", "P(loss > x) uninsured", "P(loss > x) after transfer"]
+          : ["Annual loss", "P(loss > x) uninsured"],
+        rows: sampled.map((point) => {
+          const gross = `${(point.probability * 100).toFixed(1)}%`;
+          if (!layerSet) return [currencyFull(point.loss), gross];
+          const net = retainedAt(point.loss);
+          return [currencyFull(point.loss), gross, net === null ? "—" : `${(net * 100).toFixed(1)}%`];
+        }),
+      },
+    };
+  }, [result, layer, layerSet, grossExceed, netExceed]);
 
   return (
     <AppShell>
@@ -268,8 +342,9 @@ export default function TransferPage() {
 
         <p className="text-[11px] text-slate-500 mt-3">
           Modelled as an excess-of-loss layer: you keep everything up to the retention, the policy pays the next slice
-          up to its limit, and anything above that comes back to you. The indicative premium is the expected payout
-          loaded 1.4x for the insurer&apos;s capital and expenses — a demo assumption, not a quote.
+          up to its limit, and anything above that comes back to you. Expected recovery is averaged directly over the
+          simulated years rather than integrated off the curve, so it is exact for the sample. The indicative premium
+          is that payout loaded 1.4x for the insurer&apos;s capital and expenses — a demo assumption, not a quote.
           {loading && <span className="text-slate-400"> · Simulating…</span>}
         </p>
       </div>
@@ -282,12 +357,21 @@ export default function TransferPage() {
         >
           <div className="text-xs font-medium text-slate-400 mb-2">P(loss &gt; tolerance)</div>
           <div className="flex items-center gap-4 flex-wrap">
-            <span className={`font-mono text-2xl font-semibold ${grossGreen ? "text-emerald-400" : "text-risk"}`}>
-              {pct(grossExceed)}
+            <span className="inline-flex items-center gap-2">
+              <span className={`font-mono text-2xl font-semibold ${grossGreen ? "text-emerald-400" : "text-risk"}`}>
+                {pct(grossExceed)}
+              </span>
+              <StatusBadge status={grossGreen ? "pass" : "fail"}>
+                uninsured — {grossGreen ? "within appetite" : "above appetite"}
+              </StatusBadge>
             </span>
-            <span className="text-slate-500 text-xl">&rarr;</span>
-            <span className={`font-mono text-2xl font-semibold ${netGreen ? "text-emerald-400" : "text-risk"}`}>{pct(netExceed)}</span>
-            <span className="text-xs text-slate-500">uninsured &rarr; after transfer</span>
+            <span className="text-slate-500 text-xl" aria-hidden="true">&rarr;</span>
+            <span className="inline-flex items-center gap-2">
+              <span className={`font-mono text-2xl font-semibold ${netGreen ? "text-emerald-400" : "text-risk"}`}>{pct(netExceed)}</span>
+              <StatusBadge status={netGreen ? "pass" : "fail"}>
+                after transfer — {netGreen ? "within appetite" : "above appetite"}
+              </StatusBadge>
+            </span>
           </div>
           <p className="text-sm text-slate-400 mt-3">
             {transferCloses
@@ -305,6 +389,16 @@ export default function TransferPage() {
                 )} still breaches the bar. Either the retention sits above your tolerance (so the policy never engages at that threshold), or the limit is exhausted too often — raise the limit, lower the retention, or pair it with more control coverage.`}
           </p>
         </div>
+      )}
+
+      {tail?.warning && (
+        <p
+          role="status"
+          className="rounded-xl border border-amber-400/40 bg-amber-500/10 text-amber-200 px-4 py-3 text-sm mb-6"
+        >
+          <span className="font-semibold">Pricing this layer is extrapolation, not measurement.</span>{" "}
+          <span className="text-slate-300">{tail.warning}</span>
+        </p>
       )}
 
       {result && (
@@ -338,7 +432,7 @@ export default function TransferPage() {
           blue curve collapses: the layer absorbs the tail until the limit runs out.
         </p>
         <div className={`h-80 transition-opacity ${loading ? "opacity-40" : "opacity-100"}`}>
-          {chartConfig ? <ChartCanvas config={chartConfig} /> : <p className="text-sm text-slate-500">Pick a scenario to begin.</p>}
+          {chart ? <ChartCanvas {...chart} /> : <p className="text-sm text-slate-500">Pick a scenario to begin.</p>}
         </div>
       </div>
     </AppShell>

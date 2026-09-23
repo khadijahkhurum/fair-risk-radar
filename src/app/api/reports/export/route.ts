@@ -3,6 +3,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { buildCsvExport, buildPdfExport, type ExportRow } from "@/lib/report";
+import { requireUser } from "@/lib/auth";
+import { isReproducible } from "@/lib/parameter-set";
 
 // Read hits the live DB on every request. Without this, Next.js 14 treats a
 // no-arg GET route handler as static and bakes a build-time response into the
@@ -10,6 +12,12 @@ import { buildCsvExport, buildPdfExport, type ExportRow } from "@/lib/report";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  // S3: both formats were downloadable with no credential — a precise map of
+  // where the organisation is weakest, formatted for convenience.
+  const auth = await requireUser();
+  if (!auth.ok) return auth.response;
+  const { orgId } = auth.user;
+
   const format = req.nextUrl.searchParams.get("format") ?? "csv";
   if (format !== "csv" && format !== "pdf") {
     return NextResponse.json({ error: 'format must be "csv" or "pdf"' }, { status: 400 });
@@ -17,7 +25,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const controls = await prisma.control.findMany({
-      include: { coverage: { orderBy: { recordedAt: "desc" }, take: 1 } },
+      include: { coverage: { where: { orgId }, orderBy: { recordedAt: "desc" }, take: 1 } },
       orderBy: { name: "asc" },
     });
 
@@ -35,9 +43,12 @@ export async function GET(req: NextRequest) {
       coverageSource: c.coverage[0]?.source ?? "DEMO",
     }));
 
+    // G6: this took the most recent assessment run by ANYBODY. Scoped to the
+    // caller's organisation, the export is now of their own posture.
     const latest = await prisma.riskAssessment.findFirst({
+      where: { orgId },
       orderBy: { createdAt: "desc" },
-      include: { scenario: true },
+      include: { scenario: true, approvedBy: { select: { email: true } } },
     });
     const assessment = latest
       ? {
@@ -48,7 +59,18 @@ export async function GET(req: NextRequest) {
           p90Ale: latest.p90Ale,
           riskTolerance: latest.riskTolerance,
           pExceedTolerance: latest.pExceedTolerance,
-          generatedAt: latest.createdAt,
+          assessmentRunAt: latest.createdAt,
+          // G4: everything needed to re-derive or challenge the figures above.
+          seed: latest.seed,
+          trials: latest.trials,
+          engineVersion: latest.engineVersion,
+          parameterSetVersion: latest.parameterSetVersion,
+          parameterSetHash: latest.parameterSetHash,
+          commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+          reproducible: isReproducible(latest.parameterSetHash),
+          status: latest.status,
+          approvedByEmail: latest.approvedBy?.email ?? null,
+          approvedAt: latest.approvedAt,
         }
       : null;
 

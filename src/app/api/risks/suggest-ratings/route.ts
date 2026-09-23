@@ -9,33 +9,22 @@ import { scenarios, expectedLossPerEvent } from "@/lib/scenarios";
 import { threats } from "@/lib/threats";
 import { runFairSimulation } from "@/lib/fair";
 import { ratingFromAle, ratingFromProbability } from "@/lib/risk-rating";
+import { parseBody, SuggestRatings } from "@/lib/api-schemas";
+import { requireUser } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
-  }
+  const auth = await requireUser();
+  if (!auth.ok) return auth.response;
 
-  const { scenarioId, threatIds, riskTolerance } = (body ?? {}) as {
-    scenarioId?: string;
-    threatIds?: string[];
-    riskTolerance?: number | null;
-  };
-
-  const scenario = scenarios.find((s) => s.id === scenarioId);
-  if (!scenario) return NextResponse.json({ error: "A valid scenarioId is required" }, { status: 400 });
-
-  const selectedThreats = [];
-  for (const id of Array.isArray(threatIds) ? threatIds : []) {
-    const found = threats.find((t) => t.id === id);
-    if (!found) return NextResponse.json({ error: `Unknown threatId "${id}"` }, { status: 400 });
-    selectedThreats.push(found);
-  }
+  const parsed = await parseBody(req, SuggestRatings);
+  if (!parsed.ok) return parsed.response;
+  const { threatIds = [], riskTolerance } = parsed.data;
+  const scenario = scenarios.find((s) => s.id === parsed.data.scenarioId)!;
+  const selectedThreats = threatIds.map((id) => threats.find((t) => t.id === id)!);
 
   try {
     const latestCoverage = await prisma.controlCoverage.findMany({
+      where: { orgId: auth.user.orgId },
       distinct: ["controlId"],
       orderBy: { recordedAt: "desc" },
     });

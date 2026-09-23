@@ -3,6 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { ROLE_LABEL, type Role } from "@/lib/roles";
+
+interface Me {
+  name: string;
+  email: string;
+  role: Role;
+  orgName: string;
+}
 
 // Inline SVGs rather than an icon package — four glyphs is not worth a
 // dependency, and these are the only ones this app will ever need.
@@ -97,6 +105,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // click. localStorage is the whole persistence layer this needs.
   const [open, setOpen] = useState(true);
   const [hydrated, setHydrated] = useState(false);
+  const [me, setMe] = useState<Me | null>(null);
+
+  // Who is signed in, for the account block. Middleware has already refused
+  // unauthenticated navigation, so a failure here means a transport problem,
+  // not an anonymous visitor.
+  useEffect(() => {
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setMe(d?.user ?? null))
+      .catch(() => {});
+  }, []);
+
+  async function signOut() {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    window.location.href = "/login";
+  }
 
   useEffect(() => {
     const saved = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
@@ -210,10 +234,45 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        <div
-          className={`mt-auto px-[22px] text-[11px] text-slate-600 leading-relaxed ${open ? "" : "lg:hidden"}`}
-        >
-          Quantitative FAIR model · compliance-as-code · audit-trailed
+        <div className="mt-auto">
+          {me && (
+            <div className={`${open ? "px-[22px]" : "px-[22px] lg:px-0"}`}>
+              <div className={`pt-3 border-t border-white/10 ${open ? "" : "lg:hidden"}`}>
+                <div className="text-[13px] text-slate-200 truncate" title={me.email}>
+                  {me.name}
+                </div>
+                <div className="text-[11px] text-slate-500 truncate">
+                  {ROLE_LABEL[me.role]} · {me.orgName}
+                </div>
+                <button
+                  type="button"
+                  onClick={signOut}
+                  className="mt-2 text-[11px] text-slate-400 hover:text-slate-100 underline decoration-dotted decoration-slate-600 underline-offset-4"
+                >
+                  Sign out
+                </button>
+              </div>
+              {/* Collapsed rail: initials only, still a sign-out target. */}
+              <button
+                type="button"
+                onClick={signOut}
+                title={`${me.name} — sign out`}
+                aria-label={`${me.name} — sign out`}
+                className={`hidden ${open ? "" : "lg:flex"} w-9 h-9 mx-auto rounded-full border border-border items-center justify-center text-[11px] font-medium text-slate-300 hover:bg-white/10`}
+              >
+                {me.name
+                  .split(" ")
+                  .map((w) => w[0])
+                  .slice(0, 2)
+                  .join("")}
+              </button>
+            </div>
+          )}
+          <div
+            className={`mt-3 px-[22px] text-[11px] text-slate-600 leading-relaxed ${open ? "" : "lg:hidden"}`}
+          >
+            Quantitative FAIR model · compliance-as-code · audit-trailed
+          </div>
         </div>
       </aside>
 

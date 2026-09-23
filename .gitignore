@@ -12,6 +12,9 @@
 .env
 .env*.local
 
+# build artefacts
+*.tsbuildinfo
+
 # misc
 .DS_Store
 *.pem

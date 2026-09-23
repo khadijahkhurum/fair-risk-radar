@@ -13,17 +13,24 @@ import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 
 async function main() {
-  // Order matters: Risk references RiskAssessment, Evidence and
+  // Order matters: Risk references RiskAssessment and RiskOwner; Evidence and
   // ControlCoverage reference Control.
+  const audit = await prisma.auditEvent.deleteMany({});
+  const sessions = await prisma.session.deleteMany({});
   const risks = await prisma.risk.deleteMany({});
+  // G8: the owner directory goes with the risks that referenced it. Nothing
+  // else holds a name, which is the point of keeping it in one place.
+  const owners = await prisma.riskOwner.deleteMany({});
   const runs = await prisma.riskAssessment.deleteMany({});
   const evidence = await prisma.evidence.deleteMany({});
   const coverage = await prisma.controlCoverage.deleteMany({});
 
   console.log(
-    `Reset: removed ${risks.count} risks, ${runs.count} simulation runs, ` +
-      `${evidence.count} evidence records, ${coverage.count} coverage records.`
+    `Reset: removed ${risks.count} risks, ${owners.count} risk owners, ${runs.count} simulation runs, ` +
+      `${evidence.count} evidence records, ${coverage.count} coverage records, ` +
+      `${audit.count} audit events, ${sessions.count} sessions.`
   );
+  console.log("Organisations and user accounts are kept — re-seed rotates their passwords.");
   console.log("Run `npm run db:seed` to restore the demo baseline.");
 }
 
