@@ -9,7 +9,7 @@ compliance frameworks, role-based access control, and a hash-chained audit
 trail that can be re-verified on read.
 
 Live demo: **[fair-risk-radar-3r34.vercel.app](https://fair-risk-radar-3r34.vercel.app)**
-· Engine `3.0.0` · parameter set `ibm-2025-r2-partitioned` · 190 unit tests
+· Engine `3.0.0` · parameter set `ibm-2025-r2-partitioned` · 197 unit tests
 
 ---
 
@@ -338,6 +338,8 @@ src/
     report.ts         PDF generation
     aws-config.ts     AWS Config integration
   components/         UI
+    demo-evidence.ts  The seeded evidence files, and the ratios that make the
+                      AI reconciliation checkable by hand
 controls/catalog.yaml Compliance-as-code control catalogue (source of truth)
 prisma/               schema + seed
 ```
@@ -388,7 +390,7 @@ access model rather than needing a separate page.
 ### 4. Tests
 
 ```bash
-npm test        # 190 tests
+npm test        # 197 tests
 npm run typecheck
 ```
 
