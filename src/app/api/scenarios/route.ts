@@ -24,10 +24,34 @@ export async function GET() {
     // scoped (audit S2).
     const controls = await prisma.control.findMany({
       include: {
-        coverage: { where: { orgId }, orderBy: { recordedAt: "desc" }, take: 1 },
+        // BASE coverage only — frameworkId null. This is the deployment figure,
+        // and the one the simulation reads.
+        coverage: {
+          where: { orgId, frameworkId: null },
+          orderBy: { recordedAt: "desc" },
+          take: 1,
+        },
       },
       orderBy: { name: "asc" },
     });
+
+    // Framework-scoped figures, one query for the whole catalogue. `distinct`
+    // over (controlId, frameworkId) with a descending sort gives the latest row
+    // per pair, so the append-only history stays intact while the read stays
+    // bounded at one row per control per framework.
+    const scopedRows = await prisma.controlCoverage.findMany({
+      where: { orgId, frameworkId: { not: null } },
+      orderBy: { recordedAt: "desc" },
+      distinct: ["controlId", "frameworkId"],
+      select: { controlId: true, frameworkId: true, coveragePct: true },
+    });
+    const scopedByControl = new Map<string, Record<string, number>>();
+    for (const row of scopedRows) {
+      if (!row.frameworkId) continue;
+      const forControl = scopedByControl.get(row.controlId) ?? {};
+      forControl[row.frameworkId] = row.coveragePct;
+      scopedByControl.set(row.controlId, forControl);
+    }
 
     const controlsWithCoverage = controls.map((c) => ({
       id: c.id,
@@ -43,6 +67,7 @@ export async function GET() {
       awsConfigRule: c.awsConfigRule,
       coveragePct: c.coverage[0]?.coveragePct ?? 0,
       coverageSource: c.coverage[0]?.source ?? "DEMO",
+      frameworkCoveragePct: scopedByControl.get(c.id),
     }));
 
     return NextResponse.json({ scenarios, threats, frameworks, controls: controlsWithCoverage });

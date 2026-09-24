@@ -12,8 +12,15 @@ export interface ControlRow {
   pciDss: string;
   euAiAct: string;
   owaspLlm: string;
+  /** BASE coverage — the actual deployment. What the FAIR engine reads. */
   coveragePct?: number;
   coverageSource?: string;
+  /**
+   * Coverage scoped to a framework, keyed by framework id, present only where
+   * someone has set one. Absent means "no separate figure — the base applies".
+   * Never read by the risk engine: these are compliance-reporting numbers.
+   */
+  frameworkCoveragePct?: Record<string, number>;
   awsConfigRule?: string | null;
 }
 
@@ -81,7 +88,14 @@ export function ControlTable({
                   {col.label}
                 </th>
               ))}
-              {editable && <th className="px-5 py-3 font-medium">Coverage</th>}
+              {editable && (
+                <th
+                  className="px-5 py-3 font-medium"
+                  title="How much of the estate this control is deployed across. This is the figure the risk simulation reads. Per-framework figures are set on the Coverage by framework card above and never reach the simulation."
+                >
+                  Coverage <span className="font-normal text-slate-500">(deployment)</span>
+                </th>
+              )}
               {onViewEvidence && <th className="px-5 py-3 font-medium">Evidence</th>}
             </tr>
           </thead>

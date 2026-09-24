@@ -9,7 +9,7 @@ compliance frameworks, role-based access control, and a hash-chained audit
 trail that can be re-verified on read.
 
 Live demo: **[fair-risk-radar-3r34.vercel.app](https://fair-risk-radar-3r34.vercel.app)**
-· Engine `3.0.0` · parameter set `ibm-2025-r2-partitioned` · 184 unit tests
+· Engine `3.0.0` · parameter set `ibm-2025-r2-partitioned` · 190 unit tests
 
 ---
 
@@ -56,7 +56,7 @@ on it.**
 ### Other capabilities
 
 - **Live what-if panel** — drag control coverage and toggle threat communities, re-simulated on every change
-- **Per-framework coverage sliders** with cross-mapping made explicit: moving one framework moves the others that share those controls, by less, in proportion
+- **Independent per-framework coverage sliders**, selected by checkbox on the framework itself — each records coverage *as that framework scopes it*, so moving one leaves the others where they are
 - **Evidence viewer** — attach and parse CSV evidence per control, provenance-tagged
 - **AI evidence reconciliation** — reads an uploaded access review or patch report and flags where it contradicts the coverage being claimed (see [Using AI without taking its word for it](#using-ai-without-taking-its-word-for-it))
 - **AWS Config integration** — pull real control coverage from Config rule evaluations
@@ -254,8 +254,30 @@ Coverage figures carry a provenance tag — `DEMO`, `MANUAL`, or `AWS_CONFIG` �
 because a number without a source is an opinion. Coverage records are appended,
 never overwritten, so a superseded figure stays in the history.
 
-Two numbers are reported per framework, and conflating them is the most common
-way compliance dashboards mislead:
+### One control, two denominators
+
+Coverage is recorded at two levels, and keeping them apart is what lets the
+per-framework sliders be independent without publishing contradictory numbers.
+
+**Base coverage** is the deployment: how much of the estate a control is
+actually running across. It is the only figure the FAIR engine reads, because an
+attacker does not care which framework you were looking at.
+
+**Framework-scoped coverage** is that control *as a given framework scopes it*.
+PCI DSS 8.4.2 asks for MFA across the cardholder data environment; ISO/IEC 27001
+A.8.5 asks for it everywhere. One MFA rollout can honestly be 100% of the first
+and 60% of the second — two denominators, not two truths. A scoped figure is
+compliance reporting and never reaches the simulation.
+
+Resolution is "latest row for (control, framework), else latest row for
+(control, null)", so a framework starts out agreeing with the deployment and
+diverges only where someone says it should, and the append-only coverage history
+is untouched. A framework's row in the UI shows `scoped 3/8` when three of its
+eight mapped controls carry a figure of its own — so a reader can tell a
+framework assessed on its own terms from one merely showing the deployment.
+
+Two further numbers are reported per framework, and conflating them is the most
+common way compliance dashboards mislead:
 
 - **Scope** — how much of the framework this catalogue addresses at all
   (distinct references mapped ÷ the framework's requirement population).
@@ -299,7 +321,7 @@ src/
     stats.ts          Percentiles and standard error, single-estimator
     lec.ts            Loss exceedance curve interpolation
     insurance.ts      Excess-of-loss layer pricing
-    coverage.ts       Per-framework scope / implementation / assessed roll-up
+    coverage.ts       Scoped-coverage resolution + scope/implementation/assessed
     auth.ts, roles.ts Session + role gates
     audit.ts          Audit event writer
     audit-hash.ts     Canonical JSON + chain verification
@@ -366,7 +388,7 @@ access model rather than needing a separate page.
 ### 4. Tests
 
 ```bash
-npm test        # 184 tests
+npm test        # 190 tests
 npm run typecheck
 ```
 

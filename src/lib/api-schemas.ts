@@ -7,6 +7,7 @@
 import { NextResponse } from "next/server";
 import { scenarios } from "./scenarios";
 import { threats } from "./threats";
+import { frameworks } from "./frameworks";
 import { object, str, num, bool, arrayOf, idIn, nullable, optional, oneOf, type Check } from "./validate";
 
 const SCENARIO_IDS = new Set(scenarios.map((s) => s.id));
@@ -95,6 +96,15 @@ export const Login = object({
 export const SetCoverage = object({
   controlId: str({ min: 1, max: 100 }),
   coveragePct,
+  /**
+   * Absent (or null) sets the control's BASE coverage — the deployment figure
+   * the simulation reads. A framework id instead records coverage as that
+   * framework scopes it, which leaves every other framework untouched.
+   *
+   * oneOf against the real catalogue, so an unknown id is a 400 rather than a
+   * row nothing will ever resolve.
+   */
+  frameworkId: optional(nullable(oneOf(frameworks.map((f) => f.id)))),
 });
 
 /**

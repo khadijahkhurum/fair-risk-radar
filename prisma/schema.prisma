@@ -208,11 +208,26 @@ model ControlCoverage {
   orgId       String
   control     Control        @relation(fields: [controlId], references: [id])
   controlId   String
+  // NULL = the control's BASE coverage: how much of the estate this control is
+  // actually deployed across. This is the only figure the FAIR engine reads,
+  // because risk depends on the deployment, not on anyone's view of it.
+  //
+  // NON-NULL = coverage of this control AS THAT FRAMEWORK SCOPES IT. The same
+  // control can honestly differ between frameworks because the frameworks ask
+  // for different things: PCI DSS 8.4.2 requires MFA only across the cardholder
+  // data environment, while ISO/IEC 27001 A.8.5 asks for it everywhere. 100% of
+  // the CDE and 60% of the estate are both true of one MFA rollout.
+  //
+  // Resolution is "latest row for (control, framework), else latest row for
+  // (control, null)". Every row written before this column existed is a base
+  // row, so no backfill is needed.
+  frameworkId String?
   coveragePct Float // 0-100
   source      CoverageSource
   recordedAt  DateTime       @default(now())
 
   @@index([orgId, controlId, recordedAt])
+  @@index([orgId, controlId, frameworkId, recordedAt])
 }
 
 // Industry loss-profile scenarios (IBM 2025-calibrated), seeded from scenarios.ts.

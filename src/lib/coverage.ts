@@ -35,6 +35,13 @@ export interface FrameworkCoverage {
   assessedPct: number | null;
   /** Alias for implementationPct — what the per-framework slider edits. */
   coveragePct: number | null;
+  /**
+   * How many of the mapped controls carry a figure set specifically for this
+   * framework rather than inheriting the base. Surfaced so a reader can tell a
+   * framework that has been assessed on its own terms from one that is simply
+   * showing the deployment.
+   */
+  scopedCount: number;
 }
 
 // One definition of "this control maps to this framework", used by both the
@@ -43,6 +50,34 @@ export interface FrameworkCoverage {
 export function mapsToFramework(control: ControlRow, field: FrameworkColumn["field"]): boolean {
   const cell = control[field];
   return cell !== undefined && cell !== null && String(cell).trim() !== "" && String(cell) !== "N/A";
+}
+
+/**
+ * The coverage figure that counts for this control WITHIN this framework.
+ *
+ * A framework-scoped figure wins where one has been set; otherwise the base
+ * figure applies. This is what makes the per-framework sliders independent:
+ * moving one framework writes rows tagged with that framework, so it cannot
+ * change what any other framework resolves to.
+ *
+ * Independence is not a licence to publish contradictory numbers. The scoped
+ * figure means "coverage of this control as THIS framework scopes it" — PCI
+ * DSS 8.4.2 asks for MFA across the cardholder data environment, ISO/IEC 27001
+ * A.8.5 asks for it everywhere, and one rollout can be 100% of the former and
+ * 60% of the latter. Two different denominators, not two different truths.
+ *
+ * The base figure is the deployment itself, and it is the ONLY one the FAIR
+ * engine reads. A scoped figure must never reach the simulation: an attacker
+ * does not care which framework you were looking at.
+ */
+export function resolvedCoverage(control: ControlRow, frameworkId: string): number {
+  const scoped = control.frameworkCoveragePct?.[frameworkId];
+  return scoped !== undefined ? scoped : control.coveragePct ?? 0;
+}
+
+/** True when this control carries a figure specific to this framework. */
+export function hasScopedCoverage(control: ControlRow, frameworkId: string): boolean {
+  return control.frameworkCoveragePct?.[frameworkId] !== undefined;
 }
 
 export function coverageByFramework(
@@ -55,8 +90,13 @@ export function coverageByFramework(
     const meta = frameworkMeta(f.id);
     const population = meta?.population ?? null;
 
+    // Resolved, not base: a framework's implementation is the mean of what each
+    // mapped control counts for WITHIN this framework.
     const implementationPct =
-      mapped.length > 0 ? mapped.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / mapped.length : null;
+      mapped.length > 0
+        ? mapped.reduce((sum, c) => sum + resolvedCoverage(c, f.id), 0) / mapped.length
+        : null;
+    const scopedCount = mapped.filter((c) => hasScopedCoverage(c, f.id)).length;
     const scopePct = population && population > 0 ? (references.size / population) * 100 : null;
     const assessedPct =
       scopePct !== null && implementationPct !== null ? (scopePct * implementationPct) / 100 : null;
@@ -75,6 +115,7 @@ export function coverageByFramework(
       implementationPct,
       assessedPct,
       coveragePct: implementationPct,
+      scopedCount,
     };
   });
 }

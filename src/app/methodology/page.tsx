@@ -175,10 +175,25 @@ export default function MethodologyPage() {
           risk loses credibility.
         </p>
         <p>
-          Coverage is stored <strong>per control</strong>, not per control-per-framework. Two frameworks mapping the
-          same controls therefore share one <em>implementation</em> figure — that is the data model, not a bug. What
-          differs between them is <em>scope</em>, because each framework has its own requirement population. The
-          catalogue cross-maps to {frameworks.length} frameworks: {frameworks.map((f) => f.label).join(", ")}.
+          Coverage is recorded at <strong>two levels</strong>, and keeping them apart is what lets each framework be
+          assessed on its own terms without publishing contradictory numbers.
+        </p>
+        <p>
+          <Term>Base coverage</Term> is the deployment — how much of the estate a control actually runs across. It is
+          the only figure this engine reads, because an attacker does not care which framework you were looking at.
+          <br />
+          <Term>Framework-scoped coverage</Term> is that same control <em>as a given framework scopes it</em>. PCI DSS
+          8.4.2 asks for MFA across the cardholder data environment; ISO/IEC 27001 A.8.5 asks for it everywhere. One
+          MFA rollout can honestly be 100% of the first and 60% of the second. Two denominators, not two truths — and
+          a scoped figure is compliance reporting that never reaches the simulation.
+        </p>
+        <p>
+          Resolution is the latest record for that control <em>and</em> framework, falling back to the latest record
+          for the control alone. So a framework starts out agreeing with the deployment and diverges only where
+          somebody says it should, and the append-only coverage history is never rewritten. Where two frameworks map
+          the same controls and neither has been scoped, they agree — not because the model forces it, but because
+          nobody has yet claimed otherwise. The catalogue cross-maps to {frameworks.length} frameworks:{" "}
+          {frameworks.map((f) => f.label).join(", ")}.
         </p>
       </Section>
 

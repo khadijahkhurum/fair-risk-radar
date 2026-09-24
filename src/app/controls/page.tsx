@@ -3,13 +3,13 @@
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ControlTable, type ControlRow, type FrameworkColumn } from "@/components/ControlTable";
-import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
 import { atLeast, ROLE_LABEL, type Role } from "@/lib/roles";
 import { UploadCatalogPanel } from "@/components/UploadCatalogPanel";
 import { EvidenceModal } from "@/components/EvidenceModal";
 import type { NormalizedControl } from "@/lib/catalog-parser";
 import {
   coverageByFramework,
+  resolvedCoverage,
   averageOfFrameworks,
   averageAssessed,
   mapsToFramework,
@@ -95,11 +95,16 @@ export default function ControlsPage() {
    * simply snapped back on reload. The refusal was right; the silence was the
    * bug, and it is the same class P1 was about.
    */
-  async function patchCoverage(controlId: string, coveragePct: number) {
+  /**
+   * @param frameworkId null writes the control's BASE coverage — the deployment
+   * figure the simulation reads. A framework id writes coverage as that
+   * framework scopes it, which no other framework resolves to.
+   */
+  async function patchCoverage(controlId: string, coveragePct: number, frameworkId: string | null = null) {
     const res = await fetch("/api/controls", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ controlId, coveragePct }),
+      body: JSON.stringify({ controlId, coveragePct, frameworkId }),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
@@ -143,20 +148,23 @@ export default function ControlsPage() {
     }
   }
 
-  // SHIFT the mapped controls by the delta needed to move this framework's
-  // average to the target — don't flatten them all to the same number.
-  // Flattening sets every control to one value, and since the frameworks
-  // share most of their controls, that forced all six averages to become
-  // identical: the sliders could never disagree. Shifting preserves each
-  // control's own level, so frameworks with different control sets land on
-  // different averages. Shared controls still move (that is real — they are
-  // the same control), just not to the same place.
+  // Writes FRAMEWORK-SCOPED coverage, which is what makes this slider
+  // independent: rows are tagged with this framework, so no other framework
+  // resolves to them. It used to write base coverage, and because the
+  // frameworks share most of their controls, moving one dragged the rest along.
+  //
+  // It SHIFTS rather than flattens. Flattening would set every mapped control
+  // to one number and throw away the differences between them; shifting moves
+  // them together and preserves their shape. On the first drag there are no
+  // scoped rows yet, so the shift starts from each control's base figure —
+  // a framework begins life agreeing with the deployment and diverges only
+  // where someone says it should.
   async function applyFrameworkCoverage(fwId: string, targetPct: number) {
     const fw = frameworks.find((f) => f.id === fwId);
     if (!fw) return;
     const mapped = controls.filter((c) => mapsToFramework(c, fw.field));
     if (mapped.length === 0) return;
-    const current = mapped.reduce((sum, c) => sum + (c.coveragePct ?? 0), 0) / mapped.length;
+    const current = mapped.reduce((sum, c) => sum + resolvedCoverage(c, fwId), 0) / mapped.length;
     const delta = targetPct - current;
     if (Math.round(delta) === 0) return;
     setSavingFw(fwId);
@@ -167,8 +175,8 @@ export default function ControlsPage() {
           // Clamped, so a control already at 0 or 100 stops there — the
           // framework average may then fall slightly short of the target,
           // and the slider snaps to the real value on reload.
-          const next = Math.min(Math.max(Math.round((c.coveragePct ?? 0) + delta), 0), 100);
-          return patchCoverage(c.id, next);
+          const next = Math.min(Math.max(Math.round(resolvedCoverage(c, fwId) + delta), 0), 100);
+          return patchCoverage(c.id, next, fwId);
         })
       );
       await load();
@@ -342,9 +350,15 @@ export default function ControlsPage() {
             that is what the slider edits. <span className="text-slate-400">Assessed coverage</span> is their product,
             and it is the only one of the three that can honestly sit beside a framework&apos;s name.
             <br />
-            Controls are cross-mapped, so dragging one framework moves the others that share those controls — by less,
-            in proportion to how many they share. Their scope still differs, because each framework has its own
-            requirement population.
+            Tick a framework to count it towards the headline average. Each slider is{" "}
+            <span className="text-slate-400">independent</span>: it records coverage as{" "}
+            <em>that</em> framework scopes it, so moving one leaves the others where they are. That is honest rather
+            than convenient — PCI DSS asks for MFA across the cardholder data environment while ISO/IEC 27001 asks for
+            it everywhere, and one rollout can be 100% of the first and 60% of the second. Different denominators, not
+            different truths.
+            <br />
+            Until you move a framework&apos;s slider it simply shows the deployment figure from the control table
+            below. That table edits the deployment itself — the only number the risk simulation reads.
           </p>
           {cardEditNotice && (
             <p className="text-[11px] text-slate-400 border border-border rounded-lg px-3 py-2 mb-4">
@@ -376,22 +390,45 @@ export default function ControlsPage() {
               const liveAssessed = f.scopePct === null ? null : (f.scopePct * live) / 100;
               return (
                 <div key={f.id} className={counted ? "" : "opacity-45"}>
-                  <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                  {/* The selector lives HERE, on the framework it selects, rather
+                      than in a dropdown elsewhere on the page. Picking a
+                      framework and setting its posture are one task. */}
+                  <label className="flex items-baseline gap-2 mb-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={counted}
+                      onChange={() =>
+                        setFrameworkIds((ids) =>
+                          ids.includes(f.id) ? ids.filter((x) => x !== f.id) : [...ids, f.id]
+                        )
+                      }
+                      aria-label={`Count ${f.label} towards the average`}
+                      className="accent-accent shrink-0 translate-y-0.5"
+                    />
                     <span className="text-sm text-slate-200 truncate" title={f.label}>
                       {f.label}
                       {!counted && <span className="text-[10px] text-slate-600 ml-1.5">not counted</span>}
-                      {peers.length > 0 && (
+                      {f.scopedCount > 0 ? (
                         <span
-                          className="text-[10px] text-slate-500 ml-1.5 border border-border rounded px-1 py-px"
-                          title={`Maps to exactly the same controls as: ${peers.join(
-                            ", "
-                          )}. Implementation is therefore shared — but scope differs, because each framework has its own requirement population.`}
+                          className="text-[10px] text-accent2 ml-1.5 border border-accent/40 rounded px-1 py-px"
+                          title={`${f.scopedCount} of ${f.mappedCount} mapped controls carry a figure set for this framework specifically. The rest show the deployment figure.`}
                         >
-                          shared controls
+                          scoped {f.scopedCount}/{f.mappedCount}
                         </span>
+                      ) : (
+                        peers.length > 0 && (
+                          <span
+                            className="text-[10px] text-slate-500 ml-1.5 border border-border rounded px-1 py-px"
+                            title={`Maps to exactly the same controls as: ${peers.join(
+                              ", "
+                            )}. Both currently show the deployment figure, so they agree — move either slider and they part company. Their scope differs regardless, because each framework has its own requirement population.`}
+                          >
+                            shared controls
+                          </span>
+                        )
                       )}
                     </span>
-                  </div>
+                  </label>
 
                   {/* Scope — how much of the framework this catalogue addresses at all. */}
                   <div className="flex items-baseline justify-between gap-2 text-[11px] text-slate-500">
@@ -465,6 +502,21 @@ export default function ControlsPage() {
             })}
           </div>
 
+          <div className="mt-4 pt-3 border-t border-white/5 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[11px] text-slate-500">
+              {frameworkIds.length === 0
+                ? "No framework ticked — the average falls back to every scored framework."
+                : `${frameworkIds.length} of ${frameworkCoverage.length} counted towards the average.`}
+            </span>
+            <button
+              type="button"
+              onClick={() => setRequestOpen(true)}
+              className="text-xs text-accent hover:text-accent2"
+            >
+              + Request another framework&hellip;
+            </button>
+          </div>
+
           {savingFw && <div className="text-[11px] text-slate-500 mt-3">Saving coverage…</div>}
           {coverageError && (
             <p role="status" className="text-xs text-risk mt-3">
@@ -475,25 +527,6 @@ export default function ControlsPage() {
       )}
 
       <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
-        <div className="w-full max-w-sm">
-          <MultiSelectDropdown
-            label="Compliance Frameworks (select any number)"
-            placeholder="Select frameworks"
-            itemNoun="frameworks"
-            options={frameworks.map((f) => ({ id: f.id, label: f.label }))}
-            selected={frameworkIds}
-            onChange={setFrameworkIds}
-            footer={
-              <button
-                type="button"
-                onClick={() => setRequestOpen(true)}
-                className="w-full text-left text-xs text-accent hover:text-accent2"
-              >
-                + Request another framework&hellip;
-              </button>
-            }
-          />
-        </div>
         <div className="flex gap-2">
           <a
             href="/api/reports/export?format=csv"
