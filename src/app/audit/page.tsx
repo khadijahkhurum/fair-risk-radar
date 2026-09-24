@@ -28,6 +28,7 @@ interface Integrity {
 type Load =
   | { status: "loading" }
   | { status: "error"; message: string }
+  | { status: "restricted"; message: string }
   | { status: "ok"; events: AuditEvent[]; integrity: Integrity };
 
 const KIND_STYLE: Record<AuditKind, { label: string; dot: string; chip: string }> = {
@@ -38,6 +39,7 @@ const KIND_STYLE: Record<AuditKind, { label: string; dot: string; chip: string }
   AUTH: { label: "Sign-in", dot: "bg-slate-400", chip: "border-border text-slate-400" },
   APPROVAL: { label: "Sign-off", dot: "bg-violet-400", chip: "border-violet-400/40 text-violet-300" },
   ERASURE: { label: "Erasure", dot: "bg-slate-300", chip: "border-slate-300/40 text-slate-200" },
+  AI_REVIEW: { label: "AI review", dot: "bg-fuchsia-400", chip: "border-fuchsia-400/40 text-fuchsia-300" },
 };
 const KINDS: readonly AuditKind[] = AUDIT_KINDS;
 
@@ -87,6 +89,13 @@ export default function AuditPage() {
     fetch("/api/audit", { cache: "no-store" })
       .then(async (r) => {
         const data = await r.json().catch(() => ({}));
+        if (r.status === 403) {
+          setState({
+            status: "restricted",
+            message: data.error ?? "Your role cannot read the audit trail.",
+          });
+          return;
+        }
         if (!r.ok) throw new Error(data.error ?? `Request failed (${r.status})`);
         setState({ status: "ok", events: data.events ?? [], integrity: data.integrity });
       })
@@ -129,6 +138,19 @@ export default function AuditPage() {
               ? `All ${state.integrity.eventsChecked} events re-hashed on load and match their recorded chain. Altering or removing any past record would break this check — including by someone with database access.`
               : `Re-hashing failed at event index ${state.integrity.brokenAtIndex}. A record has been altered or removed since it was written.`}
           </span>
+        </div>
+      )}
+
+      {state.status === "restricted" && (
+        <div className="rounded-xl border border-border bg-surface p-5 mb-6 text-sm">
+          <span className="font-semibold text-slate-100">Audit trail restricted. </span>
+          <span className="text-slate-300">{state.message}</span>
+          <p className="text-xs text-slate-500 mt-2 max-w-2xl">
+            The trail records every action taken across this organisation, including other people&apos;s. It is
+            deliberately not filtered to your own events — an audit log whose purpose is letting one person review
+            another&apos;s actions cannot be scoped to the reader. Instead it is restricted to the role whose job that
+            review is. Sign in as the Admin demo account to read it.
+          </p>
         </div>
       )}
 
@@ -175,7 +197,9 @@ export default function AuditPage() {
           </div>
         ) : shown.length === 0 ? (
           <p className="text-sm text-slate-500">
-            {state.status === "error"
+            {state.status === "restricted"
+              ? "Nothing shown — your role cannot read the trail. This is not the same as an empty trail."
+              : state.status === "error"
               ? "Nothing shown — the trail could not be loaded. This is not the same as an empty trail."
               : events.length === 0
               ? "No events recorded yet. Run a simulation or change a control's coverage and it will appear here."

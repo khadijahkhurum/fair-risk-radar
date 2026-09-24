@@ -2,6 +2,20 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Modal } from "./Modal";
+import { StatusBadge } from "./StatusBadge";
+import type { EvidenceFinding, DroppedFinding } from "@/lib/ai/evidence-review";
+
+type ReviewState =
+  | { status: "running" }
+  | { status: "error"; message: string }
+  | {
+      status: "done";
+      findings: EvidenceFinding[];
+      dropped: DroppedFinding[];
+      model: string;
+      truncated: boolean;
+      claimedCoveragePct: number;
+    };
 
 interface EvidenceRow {
   id: string;
@@ -31,6 +45,10 @@ export function EvidenceModal({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // AI reconciliation state, keyed by evidence id — the modal can show several
+  // files, and a review belongs to one of them.
+  const [reviewing, setReviewing] = useState<string | null>(null);
+  const [reviews, setReviews] = useState<Record<string, ReviewState>>({});
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
@@ -44,6 +62,34 @@ export function EvidenceModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is redefined every render;
     // the real dependency is controlId, and adding `load` here would loop.
   }, [controlId]);
+
+  async function runReview(evidenceId: string) {
+    setReviewing(evidenceId);
+    setReviews((r) => ({ ...r, [evidenceId]: { status: "running" } }));
+    try {
+      const res = await fetch(`/api/evidence/${evidenceId}/review`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Analysis failed (${res.status})`);
+      setReviews((r) => ({
+        ...r,
+        [evidenceId]: {
+          status: "done",
+          findings: data.findings ?? [],
+          dropped: data.dropped ?? [],
+          model: data.review?.model ?? "unknown",
+          truncated: Boolean(data.review?.truncated),
+          claimedCoveragePct: data.review?.claimedCoveragePct ?? 0,
+        },
+      }));
+    } catch (err) {
+      setReviews((r) => ({
+        ...r,
+        [evidenceId]: { status: "error", message: err instanceof Error ? err.message : "Analysis failed" },
+      }));
+    } finally {
+      setReviewing(null);
+    }
+  }
 
   async function handleUpload(file: File) {
     setError(null);
@@ -149,6 +195,13 @@ export function EvidenceModal({
                   ) : (
                     <pre className="text-xs text-slate-300 whitespace-pre-wrap">{e.rawText}</pre>
                   )}
+
+                  <ReviewPanel
+                    state={reviews[e.id]}
+                    busy={reviewing === e.id}
+                    coveragePct={coveragePct}
+                    onRun={() => runReview(e.id)}
+                  />
                 </div>
               )}
             </div>
@@ -156,5 +209,116 @@ export function EvidenceModal({
         </div>
       )}
     </Modal>
+  );
+}
+
+/**
+ * The reconciliation panel.
+ *
+ * Two things here are deliberate and worth defending:
+ *
+ *  • Every finding shows its VERBATIM QUOTE from the evidence, not just the
+ *    model's prose. The quote is what was verified; showing the conclusion
+ *    without the grounding would hide the one thing that makes the finding
+ *    checkable.
+ *
+ *  • The discard count is shown. "3 findings, 2 discarded as ungrounded" tells
+ *    an analyst how much to trust the 3. Hiding it would make the feature look
+ *    more reliable than it is, which is the opposite of the point.
+ *
+ * A suggested coverage percentage is rendered as text next to a reminder that
+ * nothing applies it. There is deliberately no button here that writes it —
+ * coverage changes go through the CONTROL_OWNER path, by hand.
+ */
+function ReviewPanel({
+  state,
+  busy,
+  coveragePct,
+  onRun,
+}: {
+  state: ReviewState | undefined;
+  busy: boolean;
+  coveragePct?: number;
+  onRun: () => void;
+}) {
+  return (
+    <div className="mt-4 pt-4 border-t border-border">
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+        <div>
+          <span className="text-xs font-medium text-slate-300">Reconcile against claimed coverage</span>
+          <p className="text-[11px] text-slate-500 mt-0.5">
+            An assisted read of this file against the {coveragePct ?? 0}% claimed for this control. Findings are
+            suggestions for you to judge — nothing here changes coverage.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRun}
+          disabled={busy}
+          className="text-xs px-2.5 py-1 rounded bg-accent/15 text-accent border border-accent/30 hover:bg-accent/25 disabled:opacity-50 whitespace-nowrap"
+        >
+          {busy ? "Analysing…" : "Analyse"}
+        </button>
+      </div>
+
+      {state?.status === "error" && (
+        <p role="status" className="text-xs text-risk mt-2">
+          {state.message}
+        </p>
+      )}
+
+      {state?.status === "done" && (
+        <div className="mt-3 space-y-2">
+          <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-500">
+            <StatusBadge status={state.findings.length > 0 ? "warn" : "pass"}>
+              {state.findings.length === 0
+                ? "No contradictions found"
+                : `${state.findings.length} finding${state.findings.length === 1 ? "" : "s"}`}
+            </StatusBadge>
+            {state.dropped.length > 0 && (
+              <span title="Model output that could not be grounded in this file, and was discarded before display.">
+                {state.dropped.length} discarded as ungrounded
+              </span>
+            )}
+            {state.truncated && <span className="text-amber-300">file truncated for analysis</span>}
+            <span className="font-mono">{state.model}</span>
+          </div>
+
+          {state.findings.map((f, i) => (
+            <div key={i} className="rounded-lg border border-border bg-surface p-3">
+              <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                <StatusBadge status={f.severity === "contradiction" ? "fail" : f.severity === "gap" ? "warn" : "neutral"}>
+                  {f.severity}
+                </StatusBadge>
+                {f.rowRefs && f.rowRefs.length > 0 && (
+                  <span className="text-[11px] text-slate-500">
+                    row{f.rowRefs.length === 1 ? "" : "s"} {f.rowRefs.join(", ")}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-200">{f.observed}</p>
+              <p className="text-[11px] text-slate-500 mt-1">Against the claim: {f.claim}</p>
+              <pre className="text-[11px] text-slate-400 mt-2 p-2 rounded bg-surface2 whitespace-pre-wrap break-all">
+                {f.quote}
+              </pre>
+              {f.suggestedCoveragePct !== null && f.suggestedCoveragePct !== undefined && (
+                <p className="text-[11px] text-slate-500 mt-2">
+                  Suggests {f.suggestedCoveragePct}% coverage.{" "}
+                  <span className="text-slate-600">
+                    Not applied — a control owner changes coverage, this does not.
+                  </span>
+                </p>
+              )}
+            </div>
+          ))}
+
+          <p className="text-[11px] text-slate-600">
+            Generated by a language model and not reproducible: the same file may produce different findings on a
+            later run. Every finding above quotes this file verbatim; anything that could not be matched to the file
+            was discarded rather than shown.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }

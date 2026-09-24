@@ -110,3 +110,82 @@
     eu_ai_act: "N/A"
     owasp_llm: "LLM06: Sensitive Information Disclosure"
   awsConfigRule: null
+
+# ── Controls governing this product's own AI feature ────────────────────────
+#
+# The AI evidence-reconciliation feature is an AI system operated by this
+# organisation, so it is in scope for the same control catalogue as everything
+# else. These four are where the EU AI Act and OWASP LLM columns stop being
+# aspirational: every other control maps "N/A" into those frameworks because a
+# generic IT control has no honest AI hook, and a forced mapping would be worse
+# than a gap. These do.
+#
+# Each is implemented in code, not asserted: the implementing module is named
+# in the description so a reviewer can go and read it.
+
+- id: ai-output-grounding
+  name: AI Output Grounding Verification
+  description: >-
+    Every AI-generated finding must quote the source evidence verbatim, and the
+    quote is verified against the stored file before the finding is shown.
+    Ungrounded output is discarded and counted. Implemented in
+    src/lib/ai/evidence-review.ts (verifyResponse).
+  category: AI Governance
+  mappings:
+    nist_csf: "PR.DS-06"
+    iso27001: A.8.28
+    soc2: CC7.2
+    pci_dss: "N/A"
+    eu_ai_act: "Art. 15 (Accuracy, Robustness)"
+    owasp_llm: "LLM09: Overreliance"
+  awsConfigRule: null
+
+- id: ai-prompt-injection-containment
+  name: AI Prompt Injection Containment
+  description: >-
+    User-uploaded evidence is treated as untrusted data: delimited and
+    neutralised on input, parsed into a fixed schema on output, and — the
+    control that actually holds — given no capability to change system state.
+    A fully successful injection yields a suggestion a human discards.
+  category: AI Governance
+  mappings:
+    nist_csf: "PR.PS-06"
+    iso27001: A.8.26
+    soc2: CC6.8
+    pci_dss: "6.2.4"
+    eu_ai_act: "Art. 15 (Robustness against manipulation)"
+    owasp_llm: "LLM01: Prompt Injection"
+  awsConfigRule: null
+
+- id: ai-human-oversight
+  name: AI Human Oversight Gate
+  description: >-
+    No AI output changes a risk figure or a control coverage value. Suggestions
+    are recorded and displayed; a named CONTROL_OWNER or ANALYST decides. There
+    is no code path from model output to a state change.
+  category: AI Governance
+  mappings:
+    nist_csf: "GV.RM-01"
+    iso27001: A.5.4
+    soc2: CC5.2
+    pci_dss: "N/A"
+    eu_ai_act: "Art. 14 (Human Oversight)"
+    owasp_llm: "LLM08: Excessive Agency"
+  awsConfigRule: null
+
+- id: ai-traceability
+  name: AI Run Traceability
+  description: >-
+    Every AI analysis writes a hash-chained AI_REVIEW audit event naming the
+    requester, the pinned model version, the prompt version and the
+    kept/discarded counts. Reviews are stored and never overwritten, because
+    model output is not reproducible from a seed.
+  category: AI Governance
+  mappings:
+    nist_csf: "DE.AE-03"
+    iso27001: A.8.15
+    soc2: CC7.2
+    pci_dss: "10.2.1"
+    eu_ai_act: "Art. 12 (Record-Keeping)"
+    owasp_llm: "LLM05: Improper Output Handling"
+  awsConfigRule: null

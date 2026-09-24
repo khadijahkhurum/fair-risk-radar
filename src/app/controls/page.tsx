@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ControlTable, type ControlRow, type FrameworkColumn } from "@/components/ControlTable";
 import { MultiSelectDropdown } from "@/components/MultiSelectDropdown";
+import { atLeast, ROLE_LABEL, type Role } from "@/lib/roles";
 import { UploadCatalogPanel } from "@/components/UploadCatalogPanel";
 import { EvidenceModal } from "@/components/EvidenceModal";
 import type { NormalizedControl } from "@/lib/catalog-parser";
@@ -40,6 +41,12 @@ export default function ControlsPage() {
   const [draftFw, setDraftFw] = useState<Record<string, number>>({});
   const [savingFw, setSavingFw] = useState<string | null>(null);
   const [requestOpen, setRequestOpen] = useState(false);
+  // Who is signed in. Coverage is a CONTROL_OWNER action (the S5 boundary), so
+  // an analyst dragging a slider was getting a silent 403 and watching the
+  // value snap back with no explanation. The UI now reflects the rule.
+  const [viewerRole, setViewerRole] = useState<Role | null>(null);
+  // Any failure from a coverage write, surfaced instead of swallowed.
+  const [coverageError, setCoverageError] = useState<string | null>(null);
   const [reqName, setReqName] = useState("");
   const [reqReason, setReqReason] = useState("");
 
@@ -57,19 +64,50 @@ export default function ControlsPage() {
 
   useEffect(() => {
     load();
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setViewerRole(d?.user?.role ?? null))
+      .catch(() => setViewerRole(null));
   }, []);
 
+  // Null while /api/auth/me is in flight — treated as "not yet allowed" so the
+  // controls do not flicker from enabled to disabled.
+  const canEditCoverage = viewerRole !== null && atLeast(viewerRole, "CONTROL_OWNER");
+
+  /**
+   * Throws on failure rather than returning a boolean every caller ignored.
+   *
+   * That silent `return res.ok` is why the framework sliders looked broken: a
+   * viewer or analyst has no authority to set coverage (the S5 boundary), the
+   * server correctly returned 403, and the UI said nothing at all — the value
+   * simply snapped back on reload. The refusal was right; the silence was the
+   * bug, and it is the same class P1 was about.
+   */
   async function patchCoverage(controlId: string, coveragePct: number) {
     const res = await fetch("/api/controls", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ controlId, coveragePct }),
     });
-    return res.ok;
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(
+        data.error ??
+          (res.status === 403
+            ? "Your role cannot change control coverage."
+            : `Could not save coverage (${res.status}).`)
+      );
+    }
   }
 
   async function overrideCoverage(controlId: string, coveragePct: number) {
-    if (await patchCoverage(controlId, coveragePct)) load();
+    setCoverageError(null);
+    try {
+      await patchCoverage(controlId, coveragePct);
+      await load();
+    } catch (err) {
+      setCoverageError(err instanceof Error ? err.message : "Could not save coverage");
+    }
   }
 
   // Set every control to the same coverage, then reload once — not once per
@@ -78,10 +116,16 @@ export default function ControlsPage() {
     const pct = Number(bulkPct);
     if (!Number.isFinite(pct) || pct < 0 || pct > 100 || controls.length === 0) return;
     setApplyingBulk(true);
+    setCoverageError(null);
     try {
       await Promise.all(controls.map((c) => patchCoverage(c.id, pct)));
       await load();
       setBulkPct("");
+    } catch (err) {
+      // patchCoverage throws now. Without this the rejection was unhandled and
+      // the user saw nothing — the same silence the slider had.
+      setCoverageError(err instanceof Error ? err.message : "Could not save coverage");
+      await load();
     } finally {
       setApplyingBulk(false);
     }
@@ -104,6 +148,7 @@ export default function ControlsPage() {
     const delta = targetPct - current;
     if (Math.round(delta) === 0) return;
     setSavingFw(fwId);
+    setCoverageError(null);
     try {
       await Promise.all(
         mapped.map((c) => {
@@ -114,6 +159,11 @@ export default function ControlsPage() {
           return patchCoverage(c.id, next);
         })
       );
+      await load();
+    } catch (err) {
+      setCoverageError(err instanceof Error ? err.message : "Could not save coverage");
+      // Re-read so the slider shows the stored value rather than a change the
+      // server refused.
       await load();
     } finally {
       setSavingFw(null);
@@ -221,7 +271,8 @@ export default function ControlsPage() {
               />
               <button
                 onClick={applyBulkCoverage}
-                disabled={applyingBulk || bulkPct === ""}
+                disabled={applyingBulk || bulkPct === "" || !canEditCoverage}
+                title={canEditCoverage ? undefined : "Setting control coverage requires the Control Owner role."}
                 className="text-xs px-2 py-1 rounded border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-40 transition-colors"
               >
                 {applyingBulk ? "Applying…" : "Apply to all"}
@@ -288,7 +339,19 @@ export default function ControlsPage() {
               const counted = frameworkIds.length === 0 || frameworkIds.includes(f.id);
               const peers = identicalSetPeers(f, frameworkCoverage);
               const live = draftFw[f.id] ?? f.implementationPct ?? 0;
-              const disabled = f.implementationPct === null || savingFw !== null || !!uploaded;
+              // Three distinct reasons a slider is inert, kept apart so the UI
+              // can say which one applies instead of just greying out.
+              const noMappedControls = f.implementationPct === null;
+              const disabledReason = noMappedControls
+                ? "No controls in this catalogue map to this framework yet, so there is no implementation figure to move."
+                : uploaded
+                ? "Coverage cannot be edited while viewing an uploaded catalogue."
+                : !canEditCoverage
+                ? `Setting control coverage requires the Control Owner role.${
+                    viewerRole ? ` You are signed in as ${ROLE_LABEL[viewerRole]}.` : ""
+                  }`
+                : null;
+              const disabled = disabledReason !== null || savingFw !== null;
               // Assessed coverage recomputed against the dragged value, so the
               // bottom line moves with the slider rather than lagging a save.
               const liveAssessed = f.scopePct === null ? null : (f.scopePct * live) / 100;
@@ -327,6 +390,10 @@ export default function ControlsPage() {
                   {/* Implementation — the only dimension the slider edits. */}
                   <div className="flex items-center gap-3 mt-1">
                     <span className="text-[11px] text-slate-500 shrink-0 w-24">Implementation</span>
+                    {/* touch-none is load-bearing: without it a horizontal drag
+                        on a phone is claimed by the page as a scroll gesture and
+                        the thumb never moves, which is why these felt dead on
+                        mobile even for a Control Owner. */}
                     <input
                       type="range"
                       min={0}
@@ -335,10 +402,11 @@ export default function ControlsPage() {
                       value={live}
                       disabled={disabled}
                       aria-label={`${f.label} implementation across mapped controls`}
+                      title={disabledReason ?? undefined}
                       onChange={(e) => setDraftFw((d) => ({ ...d, [f.id]: Number(e.target.value) }))}
                       onPointerUp={(e) => applyFrameworkCoverage(f.id, Number((e.target as HTMLInputElement).value))}
                       onKeyUp={(e) => applyFrameworkCoverage(f.id, Number((e.target as HTMLInputElement).value))}
-                      className="flex-1 disabled:opacity-40"
+                      className="flex-1 touch-none disabled:opacity-40"
                     />
                     <span
                       className={`font-mono text-sm tabular-nums w-12 text-right shrink-0 ${
@@ -354,6 +422,10 @@ export default function ControlsPage() {
                       {f.implementationPct === null ? "—" : `${Math.round(live)}%`}
                     </span>
                   </div>
+
+                  {disabledReason && (
+                    <p className="text-[10px] text-slate-500 mt-1 pl-[6.75rem]">{disabledReason}</p>
+                  )}
 
                   {/* Assessed — scope x implementation. The honest headline. */}
                   <div className="flex items-baseline justify-between gap-2 text-[11px] mt-1 pt-1 border-t border-white/5">
@@ -377,6 +449,11 @@ export default function ControlsPage() {
           </div>
 
           {savingFw && <div className="text-[11px] text-slate-500 mt-3">Saving coverage…</div>}
+          {coverageError && (
+            <p role="status" className="text-xs text-risk mt-3">
+              {coverageError}
+            </p>
+          )}
         </div>
       )}
 

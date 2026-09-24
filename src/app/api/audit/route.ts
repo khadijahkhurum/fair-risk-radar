@@ -14,7 +14,12 @@ export const dynamic = "force-dynamic";
 const PAGE_SIZE = 200;
 
 export async function GET() {
-  const auth = await requireUser();
+  // The trail is ORGANISATION-scoped, not per-user: an audit log whose whole
+  // purpose is letting one person review another's actions cannot be filtered
+  // to "your own events". What it should be is restricted to the people whose
+  // job that review is, which is what this gate does — previously any signed-in
+  // member could read it, including a Viewer.
+  const auth = await requireUser("ADMIN");
   if (!auth.ok) return auth.response;
   const { orgId } = auth.user;
 

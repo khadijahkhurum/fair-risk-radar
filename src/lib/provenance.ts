@@ -138,6 +138,24 @@ export const PARAMETER_PROVENANCE: ParameterProvenance[] = [
     lastReviewed: "2026-09",
   },
   {
+    parameter: "AI evidence review — model",
+    value: "claude-sonnet-4-5-20250929 (pinned)",
+    basis: "JUDGEMENT",
+    source: "None. A model choice, not a measured parameter.",
+    derivation:
+      "Pinned rather than floating, because this feature is the one non-reproducible component in the product and a drifting version on top of that would mean nobody could say what produced a stored finding. Changing it is a deliberate act recorded on the review rows it affects.",
+    lastReviewed: "2026-09",
+  },
+  {
+    parameter: "AI evidence review — reproducibility",
+    value: "Not reproducible",
+    basis: "JUDGEMENT",
+    source: "Inherent to language models.",
+    derivation:
+      "Unlike every simulation figure, an AI finding cannot be re-derived from a seed: the same file may produce different findings on a later run. Reviews are therefore stored as records rather than recomputed, and re-running creates a new row instead of overwriting. Findings never enter the risk model.",
+    lastReviewed: "2026-09",
+  },
+  {
     parameter: "Loss distribution shape",
     value: "Triangular (min, mode, max)",
     basis: "JUDGEMENT",

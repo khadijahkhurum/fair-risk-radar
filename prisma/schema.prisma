@@ -49,6 +49,9 @@ model User {
   // or the approval check has nothing to compare.
   assessmentsRun      RiskAssessment[] @relation("AssessmentRunBy")
   assessmentsApproved RiskAssessment[] @relation("AssessmentApprovedBy")
+  // Who asked for an AI review. The feature's accountability point: a model
+  // produced the findings, a named person chose to run it.
+  evidenceReviews     EvidenceReview[] @relation("EvidenceReviewRequestedBy")
 
   @@index([orgId])
 }
@@ -78,6 +81,10 @@ enum AuditKind {
   /// Erasure of a risk owner's name (audit G8). The act is recorded; the name
   /// it removed is not, which is the entire point.
   ERASURE
+  /// An AI evidence reconciliation ran. Records that a model looked at
+  /// evidence and what it produced — the human-oversight point for the
+  /// feature, and the EU AI Act traceability obligation in practice.
+  AI_REVIEW
 }
 
 // The canonical audit trail (audit G1, S6).
@@ -143,8 +150,50 @@ model Evidence {
   rawText     String // full text content, capped at ~200KB by the upload route
 
   uploadedAt  DateTime @default(now())
+  reviews     EvidenceReview[]
 
   @@index([orgId, controlId, uploadedAt])
+}
+
+// An AI-assisted reconciliation of one evidence file against the coverage
+// claimed for its control.
+//
+// Stored rather than recomputed, deliberately. A language model is the one
+// non-reproducible component in this product: ask twice, get two answers, and
+// no seed recovers the first. So the OUTPUT is the record. Re-running produces
+// a new row; it never overwrites an old one, because a finding an analyst
+// acted on last quarter has to still exist in the form they saw it.
+//
+// Every column that could explain a difference between two reviews is kept:
+// which model, which prompt version, what coverage was claimed at the time,
+// whether the evidence was truncated, and how many findings failed grounding
+// verification.
+model EvidenceReview {
+  id            String   @id @default(cuid())
+  orgId         String
+  evidence      Evidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  evidenceId    String
+  controlId     String
+  /// The claim this review examined. Coverage changes; a finding only means
+  /// something against the number it was checked against.
+  claimedCoveragePct Float
+  model         String
+  promptVersion String
+  /// Verified findings, as stored for the analyst. Model output that failed
+  /// grounding never reaches this column.
+  findings      Json
+  /// How many the model produced that failed verification — an honest signal
+  /// about model reliability, and useless if it is not recorded.
+  findingsDropped Int     @default(0)
+  /// True when the evidence was too long to send whole.
+  truncated     Boolean  @default(false)
+  inputTokens   Int      @default(0)
+  outputTokens  Int      @default(0)
+  requestedBy   User     @relation("EvidenceReviewRequestedBy", fields: [requestedById], references: [id])
+  requestedById String
+  createdAt     DateTime @default(now())
+
+  @@index([orgId, evidenceId, createdAt])
 }
 
 // Coverage % is provenance-tagged: a number always says where it came from.

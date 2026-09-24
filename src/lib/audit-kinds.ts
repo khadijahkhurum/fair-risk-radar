@@ -24,6 +24,7 @@ export const AUDIT_KINDS = [
   "AUTH",
   "APPROVAL",
   "ERASURE",
+  "AI_REVIEW",
 ] as const;
 
 export type AuditKind = (typeof AUDIT_KINDS)[number];

@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { ROLE_LABEL, type Role } from "@/lib/roles";
+import { useEffect, useState, type ComponentType } from "react";
+import { atLeast, ROLE_LABEL, type Role } from "@/lib/roles";
 
 interface Me {
   name: string;
@@ -72,13 +72,17 @@ function IconAudit() {
   );
 }
 
-const NAV = [
+// `minRole` mirrors the server gate on that route's API. It is presentation
+// only — hiding a link is not authorisation, and the route refuses the request
+// on its own — but a nav entry that 403s for three of the four demo accounts
+// is a defect in its own right.
+const NAV: { href: string; label: string; Icon: ComponentType; minRole?: Role }[] = [
   { href: "/", label: "Risk Simulator", Icon: IconSimulator },
   { href: "/controls", label: "Control Posture", Icon: IconControls },
   { href: "/risks", label: "Risk Register", Icon: IconRegister },
   { href: "/roi", label: "ROI Analysis", Icon: IconRoi },
   { href: "/transfer", label: "Risk Transfer", Icon: IconTransfer },
-  { href: "/audit", label: "Audit Trail", Icon: IconAudit },
+  { href: "/audit", label: "Audit Trail", Icon: IconAudit, minRole: "ADMIN" },
   { href: "/methodology", label: "Methodology", Icon: IconBook },
 ];
 
@@ -122,14 +126,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     window.location.href = "/login";
   }
 
+  // The stored value is a DESKTOP preference, and only means something there:
+  // on desktop `open` picks between a labelled panel and an icon rail, and the
+  // page stays usable either way. On a phone the panel is off-canvas and
+  // `open` means a drawer with a full-screen scrim over the content — so a
+  // page loaded with it open has every control on it untappable. That is what
+  // made the framework sliders and the framework selector look broken: nothing
+  // was wrong with either, a black overlay was swallowing the taps.
+  //
+  // So on small screens the drawer always starts closed, whatever was saved.
   useEffect(() => {
-    const saved = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
+    const small = window.matchMedia("(max-width: 1023.98px)").matches;
+    if (small) {
+      setOpen(false);
+      setHydrated(true);
+      return;
+    }
+    const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved !== null) setOpen(saved === "1");
     setHydrated(true);
   }, []);
 
   function persist(next: boolean) {
     try {
+      // Phone-sized toggling is transient drawer use, not a stated preference
+      // about the desktop rail, so it does not overwrite the stored one.
+      if (window.matchMedia("(max-width: 1023.98px)").matches) return;
       window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
     } catch {
       // private mode / storage disabled — the toggle still works this session
@@ -205,7 +227,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className={`flex flex-col gap-1 text-[13px] ${open ? "px-3" : "px-3 lg:px-0"}`}>
-          {NAV.map(({ href, label, Icon }) => {
+          {NAV.filter(
+            // Until /api/auth/me answers, `me` is null and nothing is hidden:
+            // a link that flickers away is worse than one that 403s, and the
+            // route is the actual gate either way.
+            ({ minRole }) => !minRole || me === null || atLeast(me.role, minRole)
+          ).map(({ href, label, Icon }) => {
             const active = pathname === href;
             return (
               <Link

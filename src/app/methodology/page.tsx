@@ -67,6 +67,7 @@ export default function MethodologyPage() {
             ["provenance-table", "Parameter provenance"],
             ["governance", "Model governance"],
             ["retention", "Retention and erasure"],
+            ["ai", "AI assistance"],
             ["validation", "Validation evidence"],
             ["limits", "Assumptions and limits"],
             ["howto", "How to use it"],
@@ -526,6 +527,63 @@ export default function MethodologyPage() {
             </tbody>
           </table>
         </div>
+      </Section>
+
+      <Section id="ai" title="AI assistance">
+        <p>
+          One feature in this product uses a language model: it reads an uploaded evidence file and reports where it
+          contradicts the coverage claimed for that control. It exists because reconciling two hundred rows of an
+          access review against a percentage is tedious, and tedium is where real findings get missed.
+        </p>
+        <p className="font-medium text-slate-200">The constraint the design rests on</p>
+        <p>
+          <strong>The model never produces a number that enters the risk model.</strong> Everything else here is
+          seeded, reproducible and parameter-hashed. A language model is none of those — ask it twice and you may get
+          two answers, and no seed recovers the first. So it is confined to reading language and proposing findings.
+          Coverage changes only when a control owner changes it, and every figure in the simulation is still derived
+          deterministically.
+        </p>
+        <p className="font-medium text-slate-200">What this is not</p>
+        <p>
+          It is not an agent. It has no tools, no write access, no autonomy and no loop. It reads text and returns a
+          fixed structure that a person reviews. The distinction matters because the risks people mean when they say
+          &ldquo;agentic AI security&rdquo; largely do not apply to a model that cannot act.
+        </p>
+        <p className="font-medium text-slate-200">Controls, in the order they matter</p>
+        <ul className="list-disc pl-5 space-y-1.5">
+          <li>
+            <strong>Capability restriction</strong> (<Term>ai-human-oversight</Term>). No code path exists from model
+            output to a coverage change or any other state. A prompt injection that fully succeeds produces a wrong
+            suggestion on screen that an analyst discards. This holds even when the prompt-level defences fail, which
+            is what makes it a control rather than a hope.
+          </li>
+          <li>
+            <strong>Output grounding</strong> (<Term>ai-output-grounding</Term>). Every finding must quote the evidence
+            verbatim, and the quote is checked against the stored file before display. A model can assert anything; it
+            cannot fabricate a string already present in a file we hold. Findings that fail are discarded, and the
+            count is shown to the analyst — so &ldquo;3 findings, 2 discarded&rdquo; tells you how much to trust the 3.
+          </li>
+          <li>
+            <strong>Injection containment</strong> (<Term>ai-prompt-injection-containment</Term>). Evidence is
+            delimited, the file cannot close its own block, and the response is parsed into a fixed schema with
+            unknown keys rejected — the same validator that guards every HTTP boundary, because model output reading
+            user-uploaded text is attacker-influenced input.
+          </li>
+          <li>
+            <strong>Traceability</strong> (<Term>ai-traceability</Term>). Every run writes a hash-chained{" "}
+            <Term>AI_REVIEW</Term> event naming the requester, the pinned model, the prompt version and the
+            kept/discarded counts. Reviews are stored, never recomputed, so a finding an analyst acted on last quarter
+            still exists in the form they saw it.
+          </li>
+        </ul>
+        <p className="font-medium text-slate-200">Accepted residual risk</p>
+        <p>
+          Prompt injection is present and not fully mitigable at the prompt layer; no delimiter survives a determined
+          attacker. It is mitigated by capability restriction and output grounding rather than by clever instructions.
+          The residual risk is an analyst spending time on a fabricated finding — made unlikely by the quote check,
+          and made visible by the discard count and the audit trail. That risk is accepted, not eliminated, and saying
+          otherwise would be the kind of claim this page exists to avoid.
+        </p>
       </Section>
 
       <Section id="limits" title="Assumptions and limitations">
