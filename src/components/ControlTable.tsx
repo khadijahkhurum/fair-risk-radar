@@ -59,6 +59,12 @@ export function ControlTable({
   const hasAwsRules = rows.some((r) => r.awsConfigRule);
   const columns = frameworkColumns.length > 0 ? frameworkColumns : [{ id: "nist_csf", label: "NIST CSF 2.0", field: "nistCsf" as const }];
 
+  // "SOC 2 (Trust Services Criteria)" sets a column's width; "SOC 2" is what
+  // anyone actually reads. The gloss moves to the header's tooltip, which is
+  // where a reader who needs it will look — and the reclaimed width is what
+  // stops the Control column wrapping every name onto three lines.
+  const short = (label: string) => label.replace(/\s*\(.*\)\s*$/, "");
+
   return (
     <div className="rounded-xl border border-border bg-surface overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4 border-b border-border">
@@ -82,32 +88,32 @@ export function ControlTable({
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-slate-400 border-b border-border">
-              <th className="px-5 py-3 font-medium sticky left-0 bg-surface">Control</th>
+              <th className="px-4 py-2.5 font-medium sticky left-0 bg-surface min-w-[15rem]">Control</th>
               {columns.map((col) => (
-                <th key={col.id} className="px-5 py-3 font-medium whitespace-nowrap">
-                  {col.label}
+                <th key={col.id} className="px-4 py-2.5 font-medium whitespace-nowrap" title={col.label}>
+                  {short(col.label)}
                 </th>
               ))}
               {editable && (
                 <th
-                  className="px-5 py-3 font-medium"
+                  className="px-4 py-2.5 font-medium"
                   title="How much of the estate this control is deployed across. This is the figure the risk simulation reads. Per-framework figures are set on the Coverage by framework card above and never reach the simulation."
                 >
                   Coverage <span className="font-normal text-slate-500">(deployment)</span>
                 </th>
               )}
-              {onViewEvidence && <th className="px-5 py-3 font-medium">Evidence</th>}
+              {onViewEvidence && <th className="px-4 py-2.5 font-medium">Evidence</th>}
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.id} className="border-b border-border/60 last:border-0">
-                <td className="px-5 py-3 sticky left-0 bg-surface">
-                  <div className="font-medium text-slate-100">{row.name}</div>
-                  <div className="text-xs text-slate-500">{row.category}</div>
+                <td className="px-4 py-2.5 sticky left-0 bg-surface min-w-[15rem]">
+                  <div className="font-medium text-slate-100 leading-snug">{row.name}</div>
+                  <div className="text-[11px] text-slate-500">{row.category}</div>
                 </td>
                 {columns.map((col) => (
-                  <td key={col.id} className="px-5 py-3 text-slate-300 whitespace-nowrap">
+                  <td key={col.id} className="px-4 py-2.5 text-slate-300 whitespace-nowrap">
                     {row[col.field] === "N/A" ? (
                       <span className="text-slate-600">N/A</span>
                     ) : (
@@ -116,7 +122,7 @@ export function ControlTable({
                   </td>
                 ))}
                 {editable && (
-                  <td className="px-5 py-3">
+                  <td className="px-4 py-2.5">
                     <div className="flex items-center gap-3">
                       <div className="w-24 h-1.5 rounded-full bg-surface2 overflow-hidden">
                         <div
@@ -168,7 +174,7 @@ export function ControlTable({
                   </td>
                 )}
                 {onViewEvidence && (
-                  <td className="px-5 py-3">
+                  <td className="px-4 py-2.5">
                     <button
                       onClick={() => onViewEvidence(row.id, row.name, row.coveragePct, row.coverageSource)}
                       className="text-sm text-accent hover:text-accent2 transition-colors"
