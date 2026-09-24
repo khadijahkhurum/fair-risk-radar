@@ -74,6 +74,18 @@ export default function ControlsPage() {
   // controls do not flicker from enabled to disabled.
   const canEditCoverage = viewerRole !== null && atLeast(viewerRole, "CONTROL_OWNER");
 
+  // Reasons that apply to the WHOLE card, stated once above it. Repeating
+  // "requires the Control Owner role" under each of six sliders read as six
+  // separate errors rather than one rule, which is what made a correct refusal
+  // look like a broken page. Only a per-framework reason stays per-slider.
+  const cardEditNotice = uploaded
+    ? "Coverage cannot be edited while viewing an uploaded catalogue. Clear the upload to edit the stored one."
+    : !canEditCoverage
+    ? `Sliders are read-only: setting control coverage requires the Control Owner role.${
+        viewerRole ? ` You are signed in as ${ROLE_LABEL[viewerRole]}.` : ""
+      }`
+    : null;
+
   /**
    * Throws on failure rather than returning a boolean every caller ignored.
    *
@@ -334,24 +346,31 @@ export default function ControlsPage() {
             in proportion to how many they share. Their scope still differs, because each framework has its own
             requirement population.
           </p>
+          {cardEditNotice && (
+            <p className="text-[11px] text-slate-400 border border-border rounded-lg px-3 py-2 mb-4">
+              {cardEditNotice}
+              {!canEditCoverage && !uploaded && (
+                <span className="text-slate-500">
+                  {" "}
+                  Sign in as the Control Owner demo account to change it.
+                </span>
+              )}
+            </p>
+          )}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-5">
             {frameworkCoverage.map((f) => {
               const counted = frameworkIds.length === 0 || frameworkIds.includes(f.id);
               const peers = identicalSetPeers(f, frameworkCoverage);
               const live = draftFw[f.id] ?? f.implementationPct ?? 0;
-              // Three distinct reasons a slider is inert, kept apart so the UI
-              // can say which one applies instead of just greying out.
+              // The only reason that DIFFERS between frameworks, so the only
+              // one worth repeating per row. The card-level ones are stated
+              // once above the grid.
               const noMappedControls = f.implementationPct === null;
-              const disabledReason = noMappedControls
+              const rowReason = noMappedControls
                 ? "No controls in this catalogue map to this framework yet, so there is no implementation figure to move."
-                : uploaded
-                ? "Coverage cannot be edited while viewing an uploaded catalogue."
-                : !canEditCoverage
-                ? `Setting control coverage requires the Control Owner role.${
-                    viewerRole ? ` You are signed in as ${ROLE_LABEL[viewerRole]}.` : ""
-                  }`
                 : null;
-              const disabled = disabledReason !== null || savingFw !== null;
+              const disabled =
+                rowReason !== null || cardEditNotice !== null || savingFw !== null;
               // Assessed coverage recomputed against the dragged value, so the
               // bottom line moves with the slider rather than lagging a save.
               const liveAssessed = f.scopePct === null ? null : (f.scopePct * live) / 100;
@@ -402,7 +421,7 @@ export default function ControlsPage() {
                       value={live}
                       disabled={disabled}
                       aria-label={`${f.label} implementation across mapped controls`}
-                      title={disabledReason ?? undefined}
+                      title={rowReason ?? cardEditNotice ?? undefined}
                       onChange={(e) => setDraftFw((d) => ({ ...d, [f.id]: Number(e.target.value) }))}
                       onPointerUp={(e) => applyFrameworkCoverage(f.id, Number((e.target as HTMLInputElement).value))}
                       onKeyUp={(e) => applyFrameworkCoverage(f.id, Number((e.target as HTMLInputElement).value))}
@@ -423,9 +442,7 @@ export default function ControlsPage() {
                     </span>
                   </div>
 
-                  {disabledReason && (
-                    <p className="text-[10px] text-slate-500 mt-1 pl-[6.75rem]">{disabledReason}</p>
-                  )}
+                  {rowReason && <p className="text-[10px] text-slate-500 mt-1 pl-[6.75rem]">{rowReason}</p>}
 
                   {/* Assessed — scope x implementation. The honest headline. */}
                   <div className="flex items-baseline justify-between gap-2 text-[11px] mt-1 pt-1 border-t border-white/5">
