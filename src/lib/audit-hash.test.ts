@@ -67,3 +67,37 @@ test("S6 — re-hashing a tampered row still breaks, because the chain binds for
   events[0].hash = computeEventHash(events[0]); // attacker recomputes this row
   assert.equal(findChainBreak(events), 1); // the NEXT row no longer matches
 });
+
+// Why /api/audit verifies the chain over the WHOLE organisation log and only
+// then filters to the rows the reader may see. A per-user audit view is a
+// filtered chain, and a filtered chain does not verify: each surviving row
+// points at a predecessor the filter removed. Verifying the slice would report
+// tampering that never happened, which is worse than showing no claim at all.
+function chainByActor(actorIds: string[]) {
+  let prev: string | null = null;
+  return actorIds.map((actorId, i) => {
+    const e = { ...base, actorId, detail: { i }, at: `2026-09-21T22:1${i}:00.000Z`, prevHash: prev };
+    const hash = computeEventHash(e);
+    prev = hash;
+    return { ...e, hash };
+  });
+}
+
+test("a chain filtered to one actor does NOT verify — integrity cannot be scoped", () => {
+  const all = chainByActor(["user_a", "user_b", "user_a"]);
+  assert.equal(findChainBreak(all), null, "the full log must verify");
+
+  const mine = all.filter((e) => e.actorId === "user_a");
+  assert.equal(mine.length, 2);
+  assert.notEqual(
+    findChainBreak(mine),
+    null,
+    "a subset must fail: user_a's second event points at user_b's hash, which is gone"
+  );
+});
+
+test("a single-actor log is the degenerate case where the filter changes nothing", () => {
+  const all = chainByActor(["user_a", "user_a"]);
+  assert.equal(findChainBreak(all), null);
+  assert.equal(findChainBreak(all.filter((e) => e.actorId === "user_a")), null);
+});

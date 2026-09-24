@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./Modal";
 import { StatusBadge } from "./StatusBadge";
 import type { EvidenceFinding, DroppedFinding } from "@/lib/ai/evidence-review";
@@ -11,10 +11,16 @@ type ReviewState =
   | {
       status: "done";
       findings: EvidenceFinding[];
+      /** Count only — a stored review keeps the number, not the discarded text. */
+      droppedCount: number;
       dropped: DroppedFinding[];
       model: string;
       truncated: boolean;
       claimedCoveragePct: number;
+      createdAt: string | null;
+      requestedBy: string | null;
+      /** True when this came from the database rather than this click. */
+      historic: boolean;
     };
 
 interface EvidenceRow {
@@ -26,6 +32,18 @@ interface EvidenceRow {
   parsedRows: Record<string, string>[] | null;
   rawText: string;
   uploadedAt: string;
+}
+
+/** What GET /api/evidence/[id]/review returns per stored row. */
+interface StoredReview {
+  id: string;
+  findings: EvidenceFinding[] | null;
+  findingsDropped: number;
+  truncated: boolean;
+  model: string;
+  claimedCoveragePct: number;
+  createdAt: string;
+  requestedBy?: { email: string } | null;
 }
 
 export function EvidenceModal({
@@ -51,19 +69,55 @@ export function EvidenceModal({
   const [reviews, setReviews] = useState<Record<string, ReviewState>>({});
   const inputRef = useRef<HTMLInputElement>(null);
 
-  async function load() {
-    const res = await fetch(`/api/controls/${controlId}/evidence`);
-    const data = await res.json();
-    if (res.ok) setEvidence(data.evidence);
-  }
+  // useCallback so the effect below can depend on it honestly, instead of
+  // suppressing the lint rule and hoping controlId was the only real input.
+  const load = useCallback(async () => {
+    const res = await fetch(`/api/controls/${controlId}/evidence`, { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(data.error ?? "Could not load evidence for this control.");
+      return;
+    }
+    const rows: EvidenceRow[] = data.evidence ?? [];
+    setEvidence(rows);
+
+    // Past reviews are stored and were never displayed: the GET route existed
+    // but nothing called it, so reopening this modal looked like the analysis
+    // had never happened. Reviews are never overwritten, so the most recent
+    // one per file is shown as history until someone re-runs it.
+    const stored: Record<string, ReviewState> = {};
+    await Promise.all(
+      rows.map(async (row) => {
+        const r = await fetch(`/api/evidence/${row.id}/review`, { cache: "no-store" });
+        if (!r.ok) return;
+        const d = await r.json().catch(() => ({}));
+        const latest: StoredReview | undefined = d.reviews?.[0];
+        if (!latest) return;
+        stored[row.id] = {
+          status: "done",
+          findings: latest.findings ?? [],
+          droppedCount: latest.findingsDropped ?? 0,
+          dropped: [],
+          model: latest.model,
+          truncated: Boolean(latest.truncated),
+          claimedCoveragePct: latest.claimedCoveragePct,
+          createdAt: latest.createdAt,
+          requestedBy: latest.requestedBy?.email ?? null,
+          historic: true,
+        };
+      })
+    );
+    if (Object.keys(stored).length > 0) setReviews(stored);
+  }, [controlId]);
 
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is redefined every render;
-    // the real dependency is controlId, and adding `load` here would loop.
-  }, [controlId]);
+  }, [load]);
 
   async function runReview(evidenceId: string) {
+    // Expand the file being analysed, so the findings are not written into a
+    // collapsed section the user has to go looking for.
+    setExpandedId(evidenceId);
     setReviewing(evidenceId);
     setReviews((r) => ({ ...r, [evidenceId]: { status: "running" } }));
     try {
@@ -75,10 +129,14 @@ export function EvidenceModal({
         [evidenceId]: {
           status: "done",
           findings: data.findings ?? [],
+          droppedCount: (data.dropped ?? []).length,
           dropped: data.dropped ?? [],
           model: data.review?.model ?? "unknown",
           truncated: Boolean(data.review?.truncated),
           claimedCoveragePct: data.review?.claimedCoveragePct ?? 0,
+          createdAt: data.review?.createdAt ?? null,
+          requestedBy: null,
+          historic: false,
         },
       }));
     } catch (err) {
@@ -151,61 +209,98 @@ export function EvidenceModal({
         </div>
       ) : (
         <div className="space-y-2">
-          {evidence.map((e) => (
-            <div key={e.id} className="rounded-lg border border-border overflow-hidden">
-              <button
-                onClick={() => setExpandedId(expandedId === e.id ? null : e.id)}
-                className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-surface2 transition-colors"
-              >
-                <div>
-                  <div className="text-sm font-medium text-slate-100">{e.filename}</div>
-                  <div className="text-xs text-slate-500">
-                    {e.summary} · {new Date(e.uploadedAt).toLocaleString()}
+          {evidence.map((e) => {
+            const review = reviews[e.id];
+            const open = expandedId === e.id;
+            return (
+              <div key={e.id} className="rounded-lg border border-border overflow-hidden">
+                {/* Two controls on one row, so the row cannot be a <button>
+                    wrapping another one. Analyse sits HERE rather than inside
+                    the expanded body: the reconciliation is the reason most
+                    people open this modal, and it was previously invisible
+                    until you happened to expand a file. */}
+                <div className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-surface2 transition-colors">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedId(open ? null : e.id)}
+                    aria-expanded={open}
+                    className="flex-1 min-w-0 text-left"
+                  >
+                    <div className="text-sm font-medium text-slate-100 truncate">{e.filename}</div>
+                    <div className="text-xs text-slate-500">
+                      {e.summary} · {new Date(e.uploadedAt).toLocaleString()}
+                    </div>
+                  </button>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {review?.status === "done" && (
+                      <StatusBadge status={review.findings.length > 0 ? "warn" : "pass"}>
+                        {review.findings.length === 0
+                          ? "reconciled"
+                          : `${review.findings.length} finding${review.findings.length === 1 ? "" : "s"}`}
+                      </StatusBadge>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => runReview(e.id)}
+                      disabled={reviewing !== null}
+                      title="Read this file against the coverage claimed for this control"
+                      className="text-xs px-2.5 py-1 rounded bg-accent/15 text-accent border border-accent/30 hover:bg-accent/25 disabled:opacity-50 whitespace-nowrap"
+                    >
+                      {reviewing === e.id ? "Analysing…" : review ? "Re-analyse" : "Analyse"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedId(open ? null : e.id)}
+                      aria-expanded={open}
+                      className="text-xs text-slate-500 hover:text-slate-300"
+                    >
+                      {open ? "Hide" : "View"}
+                    </button>
                   </div>
                 </div>
-                <span className="text-slate-500 text-xs">{expandedId === e.id ? "Hide" : "View"}</span>
-              </button>
-              {expandedId === e.id && (
-                <div className="border-t border-border p-4 bg-surface2/50">
-                  {e.parsedRows && e.parsedRows.length > 0 ? (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="text-left text-slate-400 border-b border-border">
-                            {Object.keys(e.parsedRows[0]).map((col) => (
-                              <th key={col} className="pr-4 py-1.5 font-medium">
-                                {col}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {e.parsedRows.map((row, i) => (
-                            <tr key={i} className="border-b border-border/40 last:border-0">
-                              {Object.values(row).map((val, j) => (
-                                <td key={j} className="pr-4 py-1.5 text-slate-300">
-                                  {val}
-                                </td>
+
+                {open && (
+                  <div className="border-t border-border p-4 bg-surface2/50">
+                    {e.parsedRows && e.parsedRows.length > 0 ? (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-left text-slate-400 border-b border-border">
+                              <th className="pr-3 py-1.5 font-medium text-slate-600">#</th>
+                              {Object.keys(e.parsedRows[0]).map((col) => (
+                                <th key={col} className="pr-4 py-1.5 font-medium">
+                                  {col}
+                                </th>
                               ))}
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <pre className="text-xs text-slate-300 whitespace-pre-wrap">{e.rawText}</pre>
-                  )}
+                          </thead>
+                          <tbody>
+                            {e.parsedRows.map((row, i) => (
+                              <tr key={i} className="border-b border-border/40 last:border-0">
+                                {/* Row numbers shown because findings cite them.
+                                    1-based, matching what the model is given. */}
+                                <td className="pr-3 py-1.5 text-slate-600 font-mono">{i + 1}</td>
+                                {Object.values(row).map((val, j) => (
+                                  <td key={j} className="pr-4 py-1.5 text-slate-300">
+                                    {val}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <pre className="text-xs text-slate-300 whitespace-pre-wrap">{e.rawText}</pre>
+                    )}
 
-                  <ReviewPanel
-                    state={reviews[e.id]}
-                    busy={reviewing === e.id}
-                    coveragePct={coveragePct}
-                    onRun={() => runReview(e.id)}
-                  />
-                </div>
-              )}
-            </div>
-          ))}
+                    <ReviewPanel state={review} busy={reviewing === e.id} coveragePct={coveragePct} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </Modal>
@@ -213,7 +308,7 @@ export function EvidenceModal({
 }
 
 /**
- * The reconciliation panel.
+ * The reconciliation results.
  *
  * Two things here are deliberate and worth defending:
  *
@@ -234,54 +329,61 @@ function ReviewPanel({
   state,
   busy,
   coveragePct,
-  onRun,
 }: {
   state: ReviewState | undefined;
   busy: boolean;
   coveragePct?: number;
-  onRun: () => void;
 }) {
+  if (!state && !busy) {
+    return (
+      <p className="text-[11px] text-slate-500 mt-4 pt-4 border-t border-border">
+        Not yet reconciled. <span className="text-slate-400">Analyse</span> reads this file against the{" "}
+        {coveragePct ?? 0}% claimed for this control and reports where the two disagree. Findings are suggestions for
+        you to judge — nothing here changes coverage.
+      </p>
+    );
+  }
+
   return (
     <div className="mt-4 pt-4 border-t border-border">
-      <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
-        <div>
-          <span className="text-xs font-medium text-slate-300">Reconcile against claimed coverage</span>
-          <p className="text-[11px] text-slate-500 mt-0.5">
-            An assisted read of this file against the {coveragePct ?? 0}% claimed for this control. Findings are
-            suggestions for you to judge — nothing here changes coverage.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onRun}
-          disabled={busy}
-          className="text-xs px-2.5 py-1 rounded bg-accent/15 text-accent border border-accent/30 hover:bg-accent/25 disabled:opacity-50 whitespace-nowrap"
-        >
-          {busy ? "Analysing…" : "Analyse"}
-        </button>
-      </div>
+      {state?.status === "running" && (
+        <p role="status" className="text-xs text-slate-400">
+          Reading the file against the {coveragePct ?? 0}% claimed for this control…
+        </p>
+      )}
 
       {state?.status === "error" && (
-        <p role="status" className="text-xs text-risk mt-2">
+        <p role="status" className="text-xs text-risk">
           {state.message}
         </p>
       )}
 
       {state?.status === "done" && (
-        <div className="mt-3 space-y-2">
+        <div className="space-y-2">
           <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-500">
             <StatusBadge status={state.findings.length > 0 ? "warn" : "pass"}>
               {state.findings.length === 0
                 ? "No contradictions found"
                 : `${state.findings.length} finding${state.findings.length === 1 ? "" : "s"}`}
             </StatusBadge>
-            {state.dropped.length > 0 && (
+            {state.droppedCount > 0 && (
               <span title="Model output that could not be grounded in this file, and was discarded before display.">
-                {state.dropped.length} discarded as ungrounded
+                {state.droppedCount} discarded as ungrounded
               </span>
             )}
             {state.truncated && <span className="text-amber-300">file truncated for analysis</span>}
             <span className="font-mono">{state.model}</span>
+            {state.historic && state.createdAt && (
+              <span title="Stored result. Reviews are never overwritten — re-analysing adds a new one.">
+                run {new Date(state.createdAt).toLocaleString()}
+                {state.requestedBy ? ` by ${state.requestedBy}` : ""}
+              </span>
+            )}
+            {state.claimedCoveragePct !== coveragePct && (
+              <span className="text-amber-300" title="Coverage has changed since this review ran.">
+                against {state.claimedCoveragePct}% coverage, now {coveragePct ?? 0}%
+              </span>
+            )}
           </div>
 
           {state.findings.map((f, i) => (

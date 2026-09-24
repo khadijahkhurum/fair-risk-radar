@@ -27,8 +27,8 @@ export const ROLE_LABEL: Record<Role, string> = {
 // What each role is for, shown on the sign-in screen so the demo explains its
 // own access model rather than needing a separate page.
 export const ROLE_DESCRIPTION: Record<Role, string> = {
-  VIEWER: "Read the register, posture and exports. Changes nothing.",
+  VIEWER: "Read the register, posture, exports and their own audit trail. Changes nothing.",
   ANALYST: "Run and persist simulations, create and update risks.",
   CONTROL_OWNER: "Everything an analyst can do, plus set control coverage and attach evidence.",
-  ADMIN: "Full access, including the audit trail, sign-off and organisation settings.",
+  ADMIN: "Full access, including the whole organisation's audit trail, sign-off and settings.",
 };

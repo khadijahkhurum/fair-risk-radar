@@ -9,7 +9,7 @@ compliance frameworks, role-based access control, and a hash-chained audit
 trail that can be re-verified on read.
 
 Live demo: **[fair-risk-radar-3r34.vercel.app](https://fair-risk-radar-3r34.vercel.app)**
-· Engine `3.0.0` · parameter set `ibm-2025-r2-partitioned` · 182 unit tests
+· Engine `3.0.0` · parameter set `ibm-2025-r2-partitioned` · 184 unit tests
 
 ---
 
@@ -122,10 +122,21 @@ readable anonymously. Roles are a total order — `VIEWER` → `ANALYST` →
 `CONTROL_OWNER` → `ADMIN` — so every authorisation decision is one comparison
 (`atLeast(role, required)`) instead of a permission matrix nobody maintains.
 Setting control coverage is a `CONTROL_OWNER` action, because coverage is the
-input that moves every figure downstream of it. Reading the audit trail is an
-`ADMIN` action: a log whose purpose is letting one person review another's
-actions cannot be filtered to "your own events", so it is scoped to the role
-whose job that review is.
+input that moves every figure downstream of it. The audit trail splits on the
+same principle: every member reads their **own** events, because everyone
+should be able to account for what they did, and reading **other people's** —
+the whole organisation's trail — is the escalated action and needs `ADMIN`.
+Reviewing a colleague is a privilege, not a side effect of having a login.
+
+That split has a consequence worth stating, because getting it wrong would
+manufacture a false alarm: **integrity cannot be scoped.** The hash chain links
+every event in the organisation in sequence, so a per-user slice of it does not
+verify — each surviving row points at a predecessor the filter removed. The
+chain is therefore always verified over the full log server-side, and only the
+permitted rows are returned. A member is told the record is intact, and how
+many events that claim covers, without being shown the records that prove it.
+There is a test asserting a filtered chain fails verification, so nobody
+"optimises" the route into verifying the slice.
 
 **Segregation of duties, enforced in code.** You cannot approve an assessment
 you ran. `canApprove()` returns one of four explicit refusals —
@@ -355,7 +366,7 @@ access model rather than needing a separate page.
 ### 4. Tests
 
 ```bash
-npm test        # 182 tests
+npm test        # 184 tests
 npm run typecheck
 ```
 

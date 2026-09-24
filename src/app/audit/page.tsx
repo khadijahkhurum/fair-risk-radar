@@ -23,13 +23,16 @@ interface AuditEvent {
 interface Integrity {
   verified: boolean;
   brokenAtIndex: number | null;
+  /** Events the CHAIN was verified over — the whole org log, not the slice shown. */
   eventsChecked: number;
+  eventsVisible: number;
 }
+/** "self" = your own events. "organisation" = everyone's, which needs Admin. */
+type Scope = "self" | "organisation";
 type Load =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "restricted"; message: string }
-  | { status: "ok"; events: AuditEvent[]; integrity: Integrity };
+  | { status: "ok"; events: AuditEvent[]; integrity: Integrity; scope: Scope };
 
 const KIND_STYLE: Record<AuditKind, { label: string; dot: string; chip: string }> = {
   SIMULATION: { label: "Simulation", dot: "bg-accent", chip: "border-accent/40 text-accent2" },
@@ -89,15 +92,13 @@ export default function AuditPage() {
     fetch("/api/audit", { cache: "no-store" })
       .then(async (r) => {
         const data = await r.json().catch(() => ({}));
-        if (r.status === 403) {
-          setState({
-            status: "restricted",
-            message: data.error ?? "Your role cannot read the audit trail.",
-          });
-          return;
-        }
         if (!r.ok) throw new Error(data.error ?? `Request failed (${r.status})`);
-        setState({ status: "ok", events: data.events ?? [], integrity: data.integrity });
+        setState({
+          status: "ok",
+          events: data.events ?? [],
+          integrity: data.integrity,
+          scope: data.scope === "organisation" ? "organisation" : "self",
+        });
       })
       .catch((e: unknown) =>
         setState({ status: "error", message: e instanceof Error ? e.message : "Could not load the audit trail" })
@@ -119,6 +120,9 @@ export default function AuditPage() {
         <p className="text-slate-400 mt-1">
           Every simulation, coverage change, evidence upload, risk edit and sign-in — who did it, when, and to what.
           Records are appended, never edited, and each one is hash-chained to the one before it.
+          {state.status === "ok" && state.scope === "organisation"
+            ? " You are seeing the whole organisation."
+            : " You are seeing your own events."}
         </p>
       </header>
 
@@ -135,21 +139,27 @@ export default function AuditPage() {
           </span>
           <span className="text-slate-300">
             {state.integrity.verified
-              ? `All ${state.integrity.eventsChecked} events re-hashed on load and match their recorded chain. Altering or removing any past record would break this check — including by someone with database access.`
+              ? `All ${state.integrity.eventsChecked} events in this organisation were re-hashed on load and match their recorded chain. Altering or removing any past record would break this check — including by someone with database access.${
+                  state.scope === "self"
+                    ? " The chain is verified over the whole log even though you are shown your own events: a subset of a chain cannot be verified, because each record points at the one before it."
+                    : ""
+                }`
               : `Re-hashing failed at event index ${state.integrity.brokenAtIndex}. A record has been altered or removed since it was written.`}
           </span>
         </div>
       )}
 
-      {state.status === "restricted" && (
+      {state.status === "ok" && state.scope === "self" && (
         <div className="rounded-xl border border-border bg-surface p-5 mb-6 text-sm">
-          <span className="font-semibold text-slate-100">Audit trail restricted. </span>
-          <span className="text-slate-300">{state.message}</span>
+          <span className="font-semibold text-slate-100">Showing your own events. </span>
+          <span className="text-slate-300">
+            {state.integrity.eventsVisible} of {state.integrity.eventsChecked} events in this organisation were
+            recorded by you.
+          </span>
           <p className="text-xs text-slate-500 mt-2 max-w-2xl">
-            The trail records every action taken across this organisation, including other people&apos;s. It is
-            deliberately not filtered to your own events — an audit log whose purpose is letting one person review
-            another&apos;s actions cannot be scoped to the reader. Instead it is restricted to the role whose job that
-            review is. Sign in as the Admin demo account to read it.
+            Every member can account for what they did. Reading other people&apos;s events is the escalated action and
+            needs the Admin role — reviewing a colleague is a privilege, not a side effect of having a login. Sign in
+            as the Admin demo account to see the whole organisation&apos;s trail.
           </p>
         </div>
       )}
@@ -197,12 +207,12 @@ export default function AuditPage() {
           </div>
         ) : shown.length === 0 ? (
           <p className="text-sm text-slate-500">
-            {state.status === "restricted"
-              ? "Nothing shown — your role cannot read the trail. This is not the same as an empty trail."
-              : state.status === "error"
+            {state.status === "error"
               ? "Nothing shown — the trail could not be loaded. This is not the same as an empty trail."
               : events.length === 0
-              ? "No events recorded yet. Run a simulation or change a control's coverage and it will appear here."
+              ? state.status === "ok" && state.scope === "self"
+                ? "You have not recorded any events yet. Run a simulation or upload evidence and it will appear here. Other people's events are not shown to your role."
+                : "No events recorded yet. Run a simulation or change a control's coverage and it will appear here."
               : "No events match the selected filters."}
           </p>
         ) : (

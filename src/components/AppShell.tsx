@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ComponentType } from "react";
-import { atLeast, ROLE_LABEL, type Role } from "@/lib/roles";
+import { useEffect, useState } from "react";
+import { ROLE_LABEL, type Role } from "@/lib/roles";
 
 interface Me {
   name: string;
@@ -72,17 +72,13 @@ function IconAudit() {
   );
 }
 
-// `minRole` mirrors the server gate on that route's API. It is presentation
-// only — hiding a link is not authorisation, and the route refuses the request
-// on its own — but a nav entry that 403s for three of the four demo accounts
-// is a defect in its own right.
-const NAV: { href: string; label: string; Icon: ComponentType; minRole?: Role }[] = [
+const NAV = [
   { href: "/", label: "Risk Simulator", Icon: IconSimulator },
   { href: "/controls", label: "Control Posture", Icon: IconControls },
   { href: "/risks", label: "Risk Register", Icon: IconRegister },
   { href: "/roi", label: "ROI Analysis", Icon: IconRoi },
   { href: "/transfer", label: "Risk Transfer", Icon: IconTransfer },
-  { href: "/audit", label: "Audit Trail", Icon: IconAudit, minRole: "ADMIN" },
+  { href: "/audit", label: "Audit Trail", Icon: IconAudit },
   { href: "/methodology", label: "Methodology", Icon: IconBook },
 ];
 
@@ -227,12 +223,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className={`flex flex-col gap-1 text-[13px] ${open ? "px-3" : "px-3 lg:px-0"}`}>
-          {NAV.filter(
-            // Until /api/auth/me answers, `me` is null and nothing is hidden:
-            // a link that flickers away is worse than one that 403s, and the
-            // route is the actual gate either way.
-            ({ minRole }) => !minRole || me === null || atLeast(me.role, minRole)
-          ).map(({ href, label, Icon }) => {
+          {NAV.map(({ href, label, Icon }) => {
             const active = pathname === href;
             return (
               <Link
