@@ -318,3 +318,18 @@ input[type="range"]::-moz-range-thumb {
 ::-webkit-scrollbar-track {
   background-color: transparent;
 }
+
+/* Splash rings (src/app/login/Splash.tsx). Pure CSS — a splash that needs a
+   JS animation loop is a splash that can jank on the first paint, which is
+   the one frame it exists for. */
+@keyframes frr-ring {
+  0% { transform: scale(0.55); opacity: 0; }
+  35% { opacity: 0.85; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+.animate-frr-ring {
+  animation: frr-ring 1.6s cubic-bezier(0.32, 0.72, 0, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-frr-ring { animation: none; }
+}

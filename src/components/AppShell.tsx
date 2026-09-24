@@ -112,7 +112,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // not an anonymous visitor.
   useEffect(() => {
     fetch("/api/auth/me", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        // The session died under us (expired, signed out elsewhere, database
+        // reset). The 401 has already cleared the cookie, so going to /login
+        // now lands on the sign-in page rather than bouncing back here.
+        if (r.status === 401) {
+          window.location.href = "/login";
+          return null;
+        }
+        return r.ok ? r.json() : null;
+      })
       .then((d) => setMe(d?.user ?? null))
       .catch(() => {});
   }, []);

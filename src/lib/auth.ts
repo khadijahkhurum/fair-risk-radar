@@ -10,7 +10,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "./prisma";
 import { hashSessionToken, newSessionToken } from "./password";
 import { atLeast, type Role } from "./roles";
-import { SESSION_COOKIE } from "./session-cookie";
+import { SESSION_COOKIE, sessionCookieOptions } from "./session-cookie";
 
 export { SESSION_COOKIE, sessionCookieOptions } from "./session-cookie";
 
@@ -85,10 +85,16 @@ export type AuthResult =
 export async function requireUser(minRole: Role = "VIEWER"): Promise<AuthResult> {
   const user = await currentUser();
   if (!user) {
-    return {
-      ok: false,
-      response: NextResponse.json({ error: "Authentication required" }, { status: 401 }),
-    };
+    // Clear the cookie on the way out. Middleware routes on cookie PRESENCE
+    // (it runs on the Edge and cannot reach the database), so a cookie whose
+    // session no longer exists — expired, signed out elsewhere, or wiped by a
+    // db:reset — keeps being treated as authenticated: the user sails past
+    // /login into an app that then 401s on every request, and never sees a
+    // sign-in page. Deleting it here is the one place every route already
+    // funnels through, so one stale session cannot outlive its own row.
+    const response = NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    response.cookies.set(SESSION_COOKIE, "", sessionCookieOptions());
+    return { ok: false, response };
   }
   if (!atLeast(user.role, minRole)) {
     return {
