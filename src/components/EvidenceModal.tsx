@@ -67,6 +67,10 @@ export function EvidenceModal({
   // files, and a review belongs to one of them.
   const [reviewing, setReviewing] = useState<string | null>(null);
   const [reviews, setReviews] = useState<Record<string, ReviewState>>({});
+  // Whether this deployment has a model configured. Null until the first
+  // review fetch answers — the control stays hidden until we know, because a
+  // button that appears and then vanishes is worse than one that arrives late.
+  const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // useCallback so the effect below can depend on it honestly, instead of
@@ -91,6 +95,7 @@ export function EvidenceModal({
         const r = await fetch(`/api/evidence/${row.id}/review`, { cache: "no-store" });
         if (!r.ok) return;
         const d = await r.json().catch(() => ({}));
+        setAiConfigured(Boolean(d.configured));
         const latest: StoredReview | undefined = d.reviews?.[0];
         if (!latest) return;
         stored[row.id] = {
@@ -240,15 +245,17 @@ export function EvidenceModal({
                           : `${review.findings.length} finding${review.findings.length === 1 ? "" : "s"}`}
                       </StatusBadge>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => runReview(e.id)}
-                      disabled={reviewing !== null}
-                      title="Read this file against the coverage claimed for this control"
-                      className="text-xs px-2.5 py-1 rounded bg-accent/15 text-accent border border-accent/30 hover:bg-accent/25 disabled:opacity-50 whitespace-nowrap"
-                    >
-                      {reviewing === e.id ? "Analysing…" : review ? "Re-analyse" : "Analyse"}
-                    </button>
+                    {aiConfigured && (
+                      <button
+                        type="button"
+                        onClick={() => runReview(e.id)}
+                        disabled={reviewing !== null}
+                        title="Read this file against the coverage claimed for this control"
+                        className="text-xs px-2.5 py-1 rounded bg-accent/15 text-accent border border-accent/30 hover:bg-accent/25 disabled:opacity-50 whitespace-nowrap"
+                      >
+                        {reviewing === e.id ? "Analysing…" : review ? "Re-analyse" : "Analyse"}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setExpandedId(open ? null : e.id)}
@@ -295,7 +302,12 @@ export function EvidenceModal({
                       <pre className="text-xs text-slate-300 whitespace-pre-wrap">{e.rawText}</pre>
                     )}
 
-                    <ReviewPanel state={review} busy={reviewing === e.id} coveragePct={coveragePct} />
+                    <ReviewPanel
+                      state={review}
+                      busy={reviewing === e.id}
+                      coveragePct={coveragePct}
+                      aiConfigured={aiConfigured}
+                    />
                   </div>
                 )}
               </div>
@@ -329,11 +341,32 @@ function ReviewPanel({
   state,
   busy,
   coveragePct,
+  aiConfigured,
 }: {
   state: ReviewState | undefined;
   busy: boolean;
   coveragePct?: number;
+  aiConfigured: boolean | null;
 }) {
+  // Built, tested, and not switched on here. Saying so plainly beats both a
+  // button that errors and silence that reads as a missing feature.
+  if (!state && !busy && aiConfigured === false) {
+    return (
+      <div className="text-[11px] text-slate-500 mt-4 pt-4 border-t border-border">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-slate-400">
+          In development
+        </span>
+        <p className="mt-2 max-w-xl">
+          <span className="text-slate-400">AI evidence reconciliation</span> reads this file against the{" "}
+          {coveragePct ?? 0}% claimed for this control and reports where the two disagree — each finding carrying a
+          verbatim quote checked against the file before it is shown. It is implemented and under test, and is not
+          enabled on this deployment. The code and its controls are in the repository under{" "}
+          <code className="text-slate-400">src/lib/ai/</code>.
+        </p>
+      </div>
+    );
+  }
+
   if (!state && !busy) {
     return (
       <p className="text-[11px] text-slate-500 mt-4 pt-4 border-t border-border">

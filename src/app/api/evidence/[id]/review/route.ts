@@ -178,7 +178,12 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       take: 10,
       include: { requestedBy: { select: { email: true } } },
     });
-    return NextResponse.json({ reviews });
+    // Whether this deployment can actually run a review. The UI uses it to
+    // hide the control rather than offer a button that answers 503 — an
+    // unconfigured feature should read as "not enabled here", not as broken.
+    // Stored reviews are still returned either way: a deployment that loses
+    // its key does not lose the record of what it already found.
+    return NextResponse.json({ reviews, configured: providerFromEnv() !== null });
   } catch (err) {
     console.error("GET /api/evidence/[id]/review failed:", err);
     return NextResponse.json({ error: "Failed to load evidence reviews" }, { status: 500 });

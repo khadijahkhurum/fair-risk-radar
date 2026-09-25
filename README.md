@@ -58,7 +58,7 @@ on it.**
 - **Live what-if panel** — drag control coverage and toggle threat communities, re-simulated on every change
 - **Independent per-framework coverage sliders**, selected by checkbox on the framework itself — each records coverage *as that framework scopes it*, so moving one leaves the others where they are
 - **Evidence viewer** — attach and parse CSV evidence per control, provenance-tagged
-- **AI evidence reconciliation** — reads an uploaded access review or patch report and flags where it contradicts the coverage being claimed (see [Using AI without taking its word for it](#using-ai-without-taking-its-word-for-it))
+- **AI evidence reconciliation** *(implemented, not enabled on the public demo)* — reads an uploaded access review or patch report and flags where it contradicts the coverage being claimed (see [Using AI without taking its word for it](#using-ai-without-taking-its-word-for-it))
 - **AWS Config integration** — pull real control coverage from Config rule evaluations
 - **Custom catalogue upload** — bring your own controls via CSV
 - **Board-ready exports** — PDF leading with a plain-language verdict, technical detail in an appendix; CSV for the working
@@ -192,6 +192,20 @@ rate limit.
 ---
 
 ## Using AI without taking its word for it
+
+> **Status: implemented and under test; switched off on the public demo.**
+> The endpoint, the prompt, the grounding verification and its 21 tests are all
+> in this repository and run in CI. The hosted demo has no model key configured,
+> so `providerFromEnv()` returns null, the endpoint answers `503
+> NOT_CONFIGURED`, and the UI hides the control and says the feature is in
+> development rather than offering a button that fails. Set `ANTHROPIC_API_KEY`
+> and it switches on with no code change — which is the behaviour the
+> "degrades to absent" property below is describing.
+>
+> Worth saying plainly, since it is the same judgement the rest of this project
+> is about: a public link with an unmetered model call behind it is an
+> open-ended bill, and the honest fix is a control, not optimism. The rate
+> limiter is that control; the key is simply not in place yet.
 
 The product includes one AI feature: an analyst uploads an access review or
 patch report as evidence, and a model reads it and reports where the document
