@@ -101,6 +101,13 @@ enum AuditKind {
 // recomputes, and cannot do either against "Mean ALE $9,500,884".
 model AuditEvent {
   id         String    @id @default(cuid())
+  // The chain's ORDER. It cannot be `at`: two events written in the same
+  // millisecond sort arbitrarily, so the writer picking a predecessor by
+  // "latest timestamp" and the verifier walking "oldest timestamp first" can
+  // disagree about which came first — and the chain then reports itself broken
+  // when nothing has been tampered with. A database sequence is monotonic and
+  // total, which is what an append-only log needs.
+  seq        Int       @default(autoincrement())
   orgId      String
   actorId    String
   actorEmail String
@@ -111,7 +118,9 @@ model AuditEvent {
   prevHash   String?
   hash       String
 
-  @@index([orgId, at])
+  // seq, not at: this is the order the chain is BUILT in and the order it must
+  // be VERIFIED in, and it is the only index the trail is read through.
+  @@index([orgId, seq])
 }
 
 // Compliance-as-code control catalog, mirrored from controls/catalog.yaml.

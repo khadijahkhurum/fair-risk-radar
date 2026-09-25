@@ -101,3 +101,4 @@ test("a single-actor log is the degenerate case where the filter changes nothing
   assert.equal(findChainBreak(all), null);
   assert.equal(findChainBreak(all.filter((e) => e.actorId === "user_a")), null);
 });
+

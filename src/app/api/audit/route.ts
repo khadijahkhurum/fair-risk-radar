@@ -42,7 +42,10 @@ export async function GET() {
     // sequence. One query, filtered below — not a second round trip.
     const events = await prisma.auditEvent.findMany({
       where: { orgId },
-      orderBy: { at: "asc" },
+      // seq, not at: the chain must be verified in the order it was built.
+      // Sorting by a millisecond timestamp reorders events written in the same
+      // millisecond and reports a false break.
+      orderBy: { seq: "asc" },
       take: PAGE_SIZE,
     });
 

@@ -85,9 +85,17 @@ export function ControlTable({
         )}
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        {/* border-separate is load-bearing, not styling. Tailwind's preflight
+            sets border-collapse: collapse on every table, and Chrome silently
+            ignores position: sticky on a cell inside a collapsed-border table.
+            The Control column therefore scrolled away with everything else the
+            moment the table was scrolled right, leaving a blank pinned gap
+            where the names should be. border-spacing-0 keeps the appearance
+            identical; the row rules move onto the cells, because separated
+            borders do not draw a border set on the <tr>. */}
+        <table className="w-full text-sm border-separate border-spacing-0">
           <thead>
-            <tr className="text-left text-slate-400 border-b border-border">
+            <tr className="text-left text-slate-400 [&>th]:border-b [&>th]:border-border">
               <th className="px-4 py-2.5 font-medium sticky left-0 bg-surface min-w-[15rem]">Control</th>
               {columns.map((col) => (
                 <th key={col.id} className="px-4 py-2.5 font-medium whitespace-nowrap" title={col.label}>
@@ -107,7 +115,7 @@ export function ControlTable({
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.id} className="border-b border-border/60 last:border-0">
+              <tr key={row.id} className="[&>td]:border-b [&>td]:border-border/60 last:[&>td]:border-0">
                 <td className="px-4 py-2.5 sticky left-0 bg-surface min-w-[15rem]">
                   <div className="font-medium text-slate-100 leading-snug">{row.name}</div>
                   <div className="text-[11px] text-slate-500">{row.category}</div>
