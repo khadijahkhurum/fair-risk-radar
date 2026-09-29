@@ -11,9 +11,20 @@
 // rendering off static generation, which is a larger change than this batch.
 // Fonts are allow-listed explicitly because globals.css imports Inter from
 // Google Fonts — a CSP that omits them silently breaks the typography.
+// Fast Refresh compiles modules with eval(), so a CSP without 'unsafe-eval'
+// makes the webpack runtime throw before React hydrates — every button on
+// every page goes dead in `next dev`, while the production build is fine
+// because it ships no react-refresh. Diagnosing that from the UI is miserable:
+// the page renders perfectly and simply does not respond.
+//
+// So development gets 'unsafe-eval' and production does not. The relaxation
+// cannot reach a deployment: NODE_ENV is "production" in `next build`, and
+// this array is evaluated at build time.
+const isDev = process.env.NODE_ENV !== "production";
+
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com data:",
   "img-src 'self' data: blob:",

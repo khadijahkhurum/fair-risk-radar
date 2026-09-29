@@ -5,14 +5,9 @@
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ROLES, ROLE_LABEL, ROLE_DESCRIPTION, type Role } from "@/lib/roles";
+import { DEMO_EMAIL, DEMO_PASSWORD } from "@/lib/demo-accounts";
 
-const DEMO_EMAIL: Record<Role, string> = {
-  VIEWER: "viewer@demo.fairriskradar.app",
-  ANALYST: "analyst@demo.fairriskradar.app",
-  CONTROL_OWNER: "owner@demo.fairriskradar.app",
-  ADMIN: "admin@demo.fairriskradar.app",
-};
-const DEMO_PASSWORD = "demo-password";
+
 
 export function LoginForm() {
   const router = useRouter();

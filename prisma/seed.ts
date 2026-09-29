@@ -12,6 +12,9 @@ import { load } from "js-yaml";
 import { PrismaClient } from "@prisma/client";
 import { scenarios } from "../src/lib/scenarios";
 import { hashPassword } from "../src/lib/password";
+// One definition, shared with the sign-in page, so the hash the seed writes and
+// the password the buttons send cannot drift apart.
+import { DEMO_PASSWORD, DEMO_USERS } from "../src/lib/demo-accounts";
 import { buildDemoEvidence } from "../src/lib/demo-evidence";
 
 const prisma = new PrismaClient();
@@ -66,13 +69,7 @@ function parseCsvToRows(csv: string): Record<string, string>[] {
 //
 // Set DEMO_ACCOUNTS=off to omit them entirely for a private deployment.
 const DEMO_ORG = { slug: "demo", name: "Northwind Financial (demo)" };
-const DEMO_PASSWORD = process.env.DEMO_PASSWORD ?? "demo-password";
-const DEMO_USERS = [
-  { email: "viewer@demo.fairriskradar.app", name: "Dana Viewer", role: "VIEWER" as const },
-  { email: "analyst@demo.fairriskradar.app", name: "Alex Analyst", role: "ANALYST" as const },
-  { email: "owner@demo.fairriskradar.app", name: "Omar Owner", role: "CONTROL_OWNER" as const },
-  { email: "admin@demo.fairriskradar.app", name: "Ada Admin", role: "ADMIN" as const },
-];
+
 
 async function seedDemoOrg(): Promise<string> {
   const org = await prisma.organisation.upsert({
